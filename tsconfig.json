@@ -16,5 +16,6 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["src", "electron"]
+  "include": ["src", "electron"],
+  "exclude": ["src/**/__tests__"]
 }

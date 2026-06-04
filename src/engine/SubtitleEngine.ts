@@ -18,6 +18,7 @@ export class SubtitleEngine {
   #onTick: OnTick | null = null;
   #autoCorrectionEnabled = true;
   readonly #generateId: () => string;
+  readonly #originalSegments: ReadonlyArray<{ readonly english: string; readonly chinese: string }>;
 
   constructor(
     private readonly segments: SubtitleSegment[],
@@ -25,6 +26,7 @@ export class SubtitleEngine {
     generateId?: () => string,
   ) {
     this.#generateId = generateId ?? (() => crypto.randomUUID());
+    this.#originalSegments = segments.map((s) => ({ english: s.english, chinese: s.chinese }));
   }
 
   // ===== 播放控制 =====
@@ -45,8 +47,12 @@ export class SubtitleEngine {
     this.#onTick = null;
     this.#correctionLogs = [];
     for (const event of this.correctionEvents) event.applied = false;
-    for (const segment of this.segments) {
-      if (segment.status === "revised") segment.status = "final";
+    for (let i = 0; i < this.segments.length; i++) {
+      const segment = this.segments[i]!;
+      const original = this.#originalSegments[i]!;
+      segment.english = original.english;
+      segment.chinese = original.chinese;
+      segment.status = "final";
     }
   }
 
