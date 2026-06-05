@@ -10,18 +10,20 @@ import {
 } from "../types/subtitle";
 import { composeFrontend } from "../compose";
 import type { FrontendSession } from "../modules/session/domain/Session.entity";
+import type { InputMode } from "../modules/session/application/StartSessionUseCase";
+import type { AudioDevice } from "../modules/audio/domain/AudioDevice.value-object";
 import "../styles/control.css";
 
-type AppMode = "demo" | "live";
+type AppMode = "demo" | "microphone" | "system-audio";
 
 function computeStatusText(mode: AppMode, isActive: boolean, hasCorrections: boolean): string {
-  if (mode === "live") {
-    if (isActive) return "监听中";
-    return "实时模式";
+  if (mode === "demo") {
+    if (isActive) return "播放中";
+    if (hasCorrections) return "已停止";
+    return "未播放";
   }
-  if (isActive) return "播放中";
-  if (hasCorrections) return "已停止";
-  return "未播放";
+  if (isActive) return "监听中";
+  return "已停止";
 }
 
 const isElectronEnv = typeof window !== "undefined" && typeof window.electronAPI !== "undefined";
@@ -42,6 +44,13 @@ export function ControlPanel() {
   const [subtitleColor, setSubtitleColor] = useState(defaultSettings.subtitleColor);
   const [autoCorrection, setAutoCorrection] = useState(defaultSettings.autoCorrectionEnabled);
 
+  // 实时模式状态
+  const [inputMode, setInputMode] = useState<InputMode>("demo");
+  const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [permissionStatus, setPermissionStatus] = useState<string>("");
+  const [liveError, setLiveError] = useState<string | null>(null);
+
   // 初始化引擎
   useEffect(() => {
     engineRef.current = new SubtitleEngine(demoSegments, demoCorrections);
@@ -51,7 +60,6 @@ export function ControlPanel() {
     };
   }, []);
 
-  // autoCorrection 变更时同步到引擎
   useEffect(() => {
     engineRef.current?.setAutoCorrection(autoCorrection);
   }, [autoCorrection]);
@@ -74,19 +82,15 @@ export function ControlPanel() {
     [showEnglish, showChinese, opacity, fontSize, subtitleColor],
   );
 
-  // 用 ref 始终持有最新 emitSubtitle，避免 onTick 回调闭包过时
   const emitSubtitleRef = useRef(emitSubtitle);
   emitSubtitleRef.current = emitSubtitle;
+
+  // === Demo 模式 ===
 
   const handleStart = () => {
     const engine = engineRef.current;
     if (!engine) return;
-
-    if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
+    if (timerRef.current !== null) { clearInterval(timerRef.current); timerRef.current = null; }
     engine.start((result) => {
       setCurrentSubtitle(result.currentSegment);
       if (result.newCorrections.length > 0) {
@@ -94,53 +98,53 @@ export function ControlPanel() {
       }
       emitSubtitleRef.current(result.currentSegment);
     });
-
     setIsPlaying(true);
-    timerRef.current = window.setInterval(() => {
-      engineRef.current?.tick(0.1);
-    }, 100);
+    timerRef.current = window.setInterval(() => { engineRef.current?.tick(0.1); }, 100);
   };
 
   const handlePause = () => {
     engineRef.current?.pause();
-    if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current !== null) { clearInterval(timerRef.current); timerRef.current = null; }
     setIsPlaying(false);
   };
 
-  const handleStop = () => {
+  const handleDemoStop = () => {
     engineRef.current?.stop();
-    if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current !== null) { clearInterval(timerRef.current); timerRef.current = null; }
     setIsPlaying(false);
     setCurrentSubtitle(null);
     setCorrectionLogs([]);
     emitSubtitle(null);
   };
 
-  const statusText = computeStatusText(mode, isPlaying, correctionLogs.length > 0);
+  // === 实时模式 ===
 
-  const handleModeSwitch = (newMode: AppMode) => {
-    handleStop();
-    setMode(newMode);
-  };
-
-  // 实时模式依赖（lazy init 仅执行一次）
   const [deps] = useState(() => composeFrontend());
   const liveSessionRef = useRef<FrontendSession | null>(null);
-  const [liveError, setLiveError] = useState<string | null>(null);
+
+  const handleRefreshDevices = async () => {
+    setPermissionStatus("");
+    setLiveError(null);
+    try {
+      const list = await deps.audioCapture.enumerateDevices();
+      setDevices(list);
+      if (list.length > 0 && !selectedDeviceId) {
+        setSelectedDeviceId(list[0]!.deviceId);
+      }
+      setPermissionStatus("权限已获取");
+    } catch (err) {
+      setPermissionStatus("权限被拒绝");
+      setLiveError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const handleStartListening = async () => {
     setLiveError(null);
-    const { startSessionUseCase } = deps;
-
-    const wsEndpoint = "ws://localhost:3001";
-    const result = await startSessionUseCase.execute("live", wsEndpoint);
-
+    if (!selectedDeviceId) {
+      handleRefreshDevices();
+      return;
+    }
+    const result = await deps.startSessionUseCase.execute(inputMode, "ws://localhost:3001", selectedDeviceId);
     if (result.ok) {
       liveSessionRef.current = result.data;
       setIsPlaying(true);
@@ -150,9 +154,8 @@ export function ControlPanel() {
   };
 
   const handleStopListening = async () => {
-    const { startSessionUseCase } = deps;
     if (liveSessionRef.current) {
-      await startSessionUseCase.stop(liveSessionRef.current);
+      await deps.startSessionUseCase.stop(liveSessionRef.current);
     }
     liveSessionRef.current = null;
     setIsPlaying(false);
@@ -161,31 +164,36 @@ export function ControlPanel() {
     emitSubtitle(null);
   };
 
+  const handleModeSwitch = (newMode: AppMode) => {
+    if (isPlaying) {
+      if (inputMode === "demo") { handleDemoStop(); } else { handleStopListening(); }
+    }
+    setMode(newMode);
+    if (newMode === "demo") {
+      setInputMode("demo");
+    } else if (newMode === "microphone") {
+      setInputMode("microphone");
+    } else {
+      setInputMode("system-audio");
+    }
+  };
+
+  const statusText = computeStatusText(mode, isPlaying, correctionLogs.length > 0);
+
   return (
     <div className="control-panel">
       <header className="control-header">
         <h1>FloatTrans AI</h1>
         <p className="subtitle-text">极简桌面双语字幕助手</p>
         <div className="mode-toggle">
-          <button
-            className={`mode-btn ${mode === "demo" ? "active" : ""}`}
-            onClick={() => handleModeSwitch("demo")}
-          >
-            🎬 演示
-          </button>
-          <button
-            className={`mode-btn ${mode === "live" ? "active" : ""}`}
-            onClick={() => handleModeSwitch("live")}
-          >
-            🎤 实时
-          </button>
+          <button className={`mode-btn ${mode === "demo" ? "active" : ""}`} onClick={() => handleModeSwitch("demo")}>🎬 演示</button>
+          <button className={`mode-btn ${mode === "microphone" ? "active" : ""}`} onClick={() => handleModeSwitch("microphone")}>🎤 麦克风</button>
+          <button className={`mode-btn ${mode === "system-audio" ? "active" : ""}`} onClick={() => handleModeSwitch("system-audio")}>🔊 系统音频</button>
         </div>
         <p className="status-text">状态：{statusText}</p>
         {!isElectronEnv && (
           <div className="env-warning">
-            ⚠ 请在 Electron 中运行 (npm run electron:dev)
-            <br />
-            当前浏览器环境不支持悬浮字幕
+            ⚠ 请在 Electron 中运行 (npm run electron:dev)<br />当前浏览器环境不支持悬浮字幕
           </div>
         )}
       </header>
@@ -193,38 +201,45 @@ export function ControlPanel() {
       <section className="control-section">
         {mode === "demo" ? (
           <div className="button-row">
-            <button className="btn btn-play" onClick={handleStart} disabled={isPlaying}>
-              ▶ 开始播放
-            </button>
-            <button className="btn btn-pause" onClick={handlePause} disabled={!isPlaying}>
-              ⏸ 暂停
-            </button>
-            <button className="btn btn-stop" onClick={handleStop}>
-              ⏹ 停止
-            </button>
+            <button className="btn btn-play" onClick={handleStart} disabled={isPlaying}>▶ 开始播放</button>
+            <button className="btn btn-pause" onClick={handlePause} disabled={!isPlaying}>⏸ 暂停</button>
+            <button className="btn btn-stop" onClick={handleDemoStop}>⏹ 停止</button>
           </div>
         ) : (
-          <div className="button-row">
-            <button className="btn btn-play" onClick={handleStartListening} disabled={isPlaying}>
-              🎤 开始监听
-            </button>
-            <button className="btn btn-stop" onClick={handleStopListening} disabled={!isPlaying}>
-              ⏹ 停止监听
-            </button>
+          <>
+            {mode === "system-audio" && (
+              <div className="hint-box">
+                💡 <strong>系统音频采集需要虚拟声卡</strong>：安装
+                <a href="https://vb-audio.com/Cable/" target="_blank" rel="noreferrer"> VB-CABLE</a> 或
+                <a href="https://vb-audio.com/Voicemeeter/" target="_blank" rel="noreferrer"> Voicemeeter</a> 后点击刷新设备，选择虚拟声卡设备即可。
+              </div>
+            )}
+            <div className="device-row">
+              <select className="device-select" value={selectedDeviceId} onChange={(e) => setSelectedDeviceId(e.target.value)} disabled={isPlaying}>
+                <option value="">-- 请先刷新设备列表 --</option>
+                {devices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                ))}
+              </select>
+              <button className="btn btn-refresh" onClick={handleRefreshDevices} disabled={isPlaying}>🔄 刷新</button>
+            </div>
+            {permissionStatus && <p className="perm-status">{permissionStatus}</p>}
+            <div className="button-row">
+              <button className="btn btn-play" onClick={handleStartListening} disabled={isPlaying || !selectedDeviceId}>🎤 开始监听</button>
+              <button className="btn btn-stop" onClick={handleStopListening} disabled={!isPlaying}>⏹ 停止监听</button>
+            </div>
             {liveError && <p className="live-error">{liveError}</p>}
-          </div>
+          </>
         )}
       </section>
 
       <section className="control-section">
         <h3>字幕显示</h3>
         <label className="checkbox-label">
-          <input type="checkbox" checked={showEnglish} onChange={(e) => setShowEnglish(e.target.checked)} />
-          英文字幕
+          <input type="checkbox" checked={showEnglish} onChange={(e) => setShowEnglish(e.target.checked)} />英文字幕
         </label>
         <label className="checkbox-label">
-          <input type="checkbox" checked={showChinese} onChange={(e) => setShowChinese(e.target.checked)} />
-          中文字幕
+          <input type="checkbox" checked={showChinese} onChange={(e) => setShowChinese(e.target.checked)} />中文字幕
         </label>
       </section>
 
@@ -232,18 +247,15 @@ export function ControlPanel() {
         <h3>字幕样式</h3>
         <div className="slider-group">
           <label>透明度 <span>{Math.round(opacity * 100)}%</span></label>
-          <input type="range" min={10} max={100} value={Math.round(opacity * 100)}
-            onChange={(e) => setOpacity(Number(e.target.value) / 100)} />
+          <input type="range" min={10} max={100} value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} />
         </div>
         <div className="slider-group">
           <label>字号 <span>{fontSize}px</span></label>
-          <input type="range" min={16} max={64} value={fontSize}
-            onChange={(e) => setFontSize(Number(e.target.value))} />
+          <input type="range" min={16} max={64} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} />
         </div>
         <div className="color-group">
           <label>颜色</label>
-          <input type="color" value={subtitleColor}
-            onChange={(e) => setSubtitleColor(e.target.value)} />
+          <input type="color" value={subtitleColor} onChange={(e) => setSubtitleColor(e.target.value)} />
           <span className="color-value">{subtitleColor}</span>
         </div>
       </section>
@@ -251,9 +263,7 @@ export function ControlPanel() {
       <section className="control-section">
         <h3>智能修正</h3>
         <label className="checkbox-label">
-          <input type="checkbox" checked={autoCorrection}
-            onChange={(e) => setAutoCorrection(e.target.checked)} />
-          自动修正历史字幕
+          <input type="checkbox" checked={autoCorrection} onChange={(e) => setAutoCorrection(e.target.checked)} />自动修正历史字幕
         </label>
       </section>
 
@@ -261,9 +271,7 @@ export function ControlPanel() {
         <section className="control-section">
           <h3>修正记录</h3>
           <div className="correction-list">
-            {correctionLogs.map((log) => (
-              <CorrectionLog key={log.id} log={log} />
-            ))}
+            {correctionLogs.map((log) => (<CorrectionLog key={log.id} log={log} />))}
           </div>
         </section>
       )}
@@ -272,10 +280,7 @@ export function ControlPanel() {
         <h3>当前字幕</h3>
         <div className="preview-box">
           {currentSubtitle ? (
-            <>
-              <p className="preview-en">{currentSubtitle.english}</p>
-              <p className="preview-zh">{currentSubtitle.chinese}</p>
-            </>
+            <><p className="preview-en">{currentSubtitle.english}</p><p className="preview-zh">{currentSubtitle.chinese}</p></>
           ) : (
             <p className="preview-empty">未播放</p>
           )}

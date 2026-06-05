@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen, ipcMain } from "electron";
+import { app, BrowserWindow, screen, ipcMain, session } from "electron";
 import path from "path";
 
 let controlWindow: BrowserWindow | null = null;
@@ -60,7 +60,8 @@ function createOverlayWindow(): void {
   }
 }
 
-// IPC 转发
+// 权限处理：允许 media 音频权限（麦克风/虚拟声卡采集必需）
+// IPC 转发：控制窗口 → 悬浮字幕窗口
 ipcMain.on("subtitle:update", (_event, payload) => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send("subtitle:update", payload);
@@ -68,6 +69,19 @@ ipcMain.on("subtitle:update", (_event, payload) => {
 });
 
 app.whenReady().then(() => {
+  // 媒体权限：允许麦克风/虚拟声卡采集
+  session.defaultSession.setPermissionRequestHandler(
+    (_webContents, permission, callback) => {
+      const allowed = ["media"];
+      callback(allowed.includes(permission));
+    },
+  );
+  session.defaultSession.setPermissionCheckHandler(
+    (_webContents, permission) => {
+      return permission === "media";
+    },
+  );
+
   createControlWindow();
   createOverlayWindow();
 

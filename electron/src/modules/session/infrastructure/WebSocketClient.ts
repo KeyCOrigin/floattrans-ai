@@ -1,6 +1,7 @@
 // WebSocketClient.ts — WebSocket 客户端封装
-// 负责：连接管理、自动重连（指数退避）、消息收发
+// 负责：连接管理、自动重连（仅断线重连，连接失败不重连）、消息收发
 
+import type { IWebSocketClient, SessionAudioFormat } from "../domain/IWebSocketClient.port";
 import { ConnectionError } from "../../../../../shared/errors/AppError";
 
 export type WSMessageCallback = (data: unknown) => void;
@@ -13,11 +14,12 @@ interface ReconnectState {
   timerId: ReturnType<typeof setTimeout> | null;
 }
 
-export class WebSocketClient {
+export class WebSocketClient implements IWebSocketClient {
   #ws: WebSocket | null = null;
   #url: string = "";
   #messageCallbacks = new Set<WSMessageCallback>();
   #binaryCallbacks = new Set<WSBinaryCallback>();
+  #wasEverConnected = false;
   #reconnectState: ReconnectState = {
     attempt: 0,
     maxAttempts: 10,
@@ -27,12 +29,14 @@ export class WebSocketClient {
 
   connect(url: string): Promise<void> {
     this.#url = url;
+    this.#wasEverConnected = false;
     return new Promise((resolve, reject) => {
       try {
         this.#ws = new WebSocket(url);
         this.#ws.binaryType = "arraybuffer";
 
         this.#ws.onopen = () => {
+          this.#wasEverConnected = true;
           this.#reconnectState.attempt = 0;
           resolve();
         };
@@ -51,7 +55,10 @@ export class WebSocketClient {
         };
 
         this.#ws.onclose = () => {
-          this.#scheduleReconnect();
+          // 仅在曾经连通过的情况下才断线重连（连接失败不重连）
+          if (this.#wasEverConnected) {
+            this.#scheduleReconnect();
+          }
         };
       } catch (err) {
         reject(err instanceof Error ? err : new ConnectionError(String(err)));
@@ -68,9 +75,15 @@ export class WebSocketClient {
     }
   }
 
-  send(data: unknown): void {
+  startSession(format: SessionAudioFormat): void {
     if (this.#ws?.readyState === WebSocket.OPEN) {
-      this.#ws.send(JSON.stringify(data));
+      this.#ws.send(JSON.stringify({ type: "session:start", audioFormat: format }));
+    }
+  }
+
+  stopSession(): void {
+    if (this.#ws?.readyState === WebSocket.OPEN) {
+      this.#ws.send(JSON.stringify({ type: "session:stop" }));
     }
   }
 
@@ -99,7 +112,7 @@ export class WebSocketClient {
     const delay = this.#reconnectState.baseDelay * Math.pow(2, this.#reconnectState.attempt);
     this.#reconnectState.attempt++;
     this.#reconnectState.timerId = setTimeout(() => {
-      if (this.#url && this.#ws === null) {
+      if (this.#url) {
         this.connect(this.#url).catch(() => {});
       }
     }, delay);
