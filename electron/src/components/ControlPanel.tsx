@@ -8,18 +8,29 @@ import {
   type CorrectionLog as CorrectionLogType,
   defaultSettings,
 } from "../types/subtitle";
+import { composeFrontend } from "../compose";
+import type { FrontendSession } from "../modules/session/domain/Session.entity";
 import "../styles/control.css";
 
-function computeStatusText(isPlaying: boolean, hasCorrections: boolean): string {
-  if (isPlaying) return "播放中";
+type AppMode = "demo" | "live";
+
+function computeStatusText(mode: AppMode, isActive: boolean, hasCorrections: boolean): string {
+  if (mode === "live") {
+    if (isActive) return "监听中";
+    return "实时模式";
+  }
+  if (isActive) return "播放中";
   if (hasCorrections) return "已停止";
   return "未播放";
 }
+
+const isElectronEnv = typeof window !== "undefined" && typeof window.electronAPI !== "undefined";
 
 export function ControlPanel() {
   const engineRef = useRef<SubtitleEngine | null>(null);
   const timerRef = useRef<number | null>(null);
 
+  const [mode, setMode] = useState<AppMode>("demo");
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentSubtitle, setCurrentSubtitle] = useState<SubtitleSegment | null>(null);
   const [correctionLogs, setCorrectionLogs] = useState<CorrectionLogType[]>([]);
@@ -63,18 +74,14 @@ export function ControlPanel() {
     [showEnglish, showChinese, opacity, fontSize, subtitleColor],
   );
 
-  // 样式变更时立即同步到 Overlay
-  useEffect(() => {
-    if (isPlaying) {
-      emitSubtitle(currentSubtitle);
-    }
-  }, [showEnglish, showChinese, opacity, fontSize, subtitleColor, isPlaying, currentSubtitle, emitSubtitle]);
+  // 用 ref 始终持有最新 emitSubtitle，避免 onTick 回调闭包过时
+  const emitSubtitleRef = useRef(emitSubtitle);
+  emitSubtitleRef.current = emitSubtitle;
 
   const handleStart = () => {
     const engine = engineRef.current;
     if (!engine) return;
 
-    // 防止重复启动产生定时器泄漏
     if (timerRef.current !== null) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -85,7 +92,7 @@ export function ControlPanel() {
       if (result.newCorrections.length > 0) {
         setCorrectionLogs((prev) => [...prev, ...result.newCorrections]);
       }
-      emitSubtitle(result.currentSegment);
+      emitSubtitleRef.current(result.currentSegment);
     });
 
     setIsPlaying(true);
@@ -115,28 +122,98 @@ export function ControlPanel() {
     emitSubtitle(null);
   };
 
-  const statusText = computeStatusText(isPlaying, correctionLogs.length > 0);
+  const statusText = computeStatusText(mode, isPlaying, correctionLogs.length > 0);
+
+  const handleModeSwitch = (newMode: AppMode) => {
+    handleStop();
+    setMode(newMode);
+  };
+
+  // 实时模式依赖（lazy init 仅执行一次）
+  const [deps] = useState(() => composeFrontend());
+  const liveSessionRef = useRef<FrontendSession | null>(null);
+  const [liveError, setLiveError] = useState<string | null>(null);
+
+  const handleStartListening = async () => {
+    setLiveError(null);
+    const { startSessionUseCase } = deps;
+
+    const wsEndpoint = "ws://localhost:3001";
+    const result = await startSessionUseCase.execute("live", wsEndpoint);
+
+    if (result.ok) {
+      liveSessionRef.current = result.data;
+      setIsPlaying(true);
+    } else {
+      setLiveError(result.error.message);
+    }
+  };
+
+  const handleStopListening = async () => {
+    const { startSessionUseCase } = deps;
+    if (liveSessionRef.current) {
+      await startSessionUseCase.stop(liveSessionRef.current);
+    }
+    liveSessionRef.current = null;
+    setIsPlaying(false);
+    setCurrentSubtitle(null);
+    setLiveError(null);
+    emitSubtitle(null);
+  };
 
   return (
     <div className="control-panel">
       <header className="control-header">
         <h1>FloatTrans AI</h1>
         <p className="subtitle-text">极简桌面双语字幕助手</p>
+        <div className="mode-toggle">
+          <button
+            className={`mode-btn ${mode === "demo" ? "active" : ""}`}
+            onClick={() => handleModeSwitch("demo")}
+          >
+            🎬 演示
+          </button>
+          <button
+            className={`mode-btn ${mode === "live" ? "active" : ""}`}
+            onClick={() => handleModeSwitch("live")}
+          >
+            🎤 实时
+          </button>
+        </div>
         <p className="status-text">状态：{statusText}</p>
+        {!isElectronEnv && (
+          <div className="env-warning">
+            ⚠ 请在 Electron 中运行 (npm run electron:dev)
+            <br />
+            当前浏览器环境不支持悬浮字幕
+          </div>
+        )}
       </header>
 
       <section className="control-section">
-        <div className="button-row">
-          <button className="btn btn-play" onClick={handleStart} disabled={isPlaying}>
-            ▶ 开始播放
-          </button>
-          <button className="btn btn-pause" onClick={handlePause} disabled={!isPlaying}>
-            ⏸ 暂停
-          </button>
-          <button className="btn btn-stop" onClick={handleStop}>
-            ⏹ 停止
-          </button>
-        </div>
+        {mode === "demo" ? (
+          <div className="button-row">
+            <button className="btn btn-play" onClick={handleStart} disabled={isPlaying}>
+              ▶ 开始播放
+            </button>
+            <button className="btn btn-pause" onClick={handlePause} disabled={!isPlaying}>
+              ⏸ 暂停
+            </button>
+            <button className="btn btn-stop" onClick={handleStop}>
+              ⏹ 停止
+            </button>
+          </div>
+        ) : (
+          <div className="button-row">
+            <button className="btn btn-play" onClick={handleStartListening} disabled={isPlaying}>
+              🎤 开始监听
+            </button>
+            <button className="btn btn-stop" onClick={handleStopListening} disabled={!isPlaying}>
+              ⏹ 停止监听
+            </button>
+            {liveError && <p className="live-error">{liveError}</p>}
+          </div>
+        )}
       </section>
 
       <section className="control-section">
