@@ -4,10 +4,10 @@
   "private": true,
   "description": "FloatTrans AI — 实时桌面双语字幕助手 (Monorepo)",
   "scripts": {
-    "dev:frontend": "cd electron && npm run dev",
+    "install:all": "cd electron && npm install && cd ../nodejs && npm install",
+    "dev": "cd electron && npm run dev",
     "dev:backend": "cd nodejs && npm run dev",
     "dev:electron": "cd electron && npm run electron:dev",
-    "dev:full": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"sleep 3 && npm run dev:electron\"",
     "build": "cd electron && npm run build",
     "typecheck": "cd electron && npx tsc --noEmit && cd ../nodejs && npx tsc --noEmit",
     "test": "cd electron && npm test"
