@@ -1,10 +1,10 @@
 // AudioPipeline.service.ts — 音频管道领域服务
 // 职责：接收音频帧 → 调 ASR → 调 LLM → 生成字幕片段与修正
 // 不持有业务状态（状态在 Session 中），仅持有会话引用用于上下文查询
+// prompt 构建职责全部委托给 ITranslationService，管道只传原始文本
 
 import type { IASRService } from "./IASRService.port";
 import type { ITranslationService } from "./ITranslationService.port";
-import type { ContextCorrectionEngine } from "./ContextCorrectionEngine.service";
 import type { ASRResult } from "./ASRResult.value-object";
 import type { Session } from "../../session/domain/Session.entity";
 import { TranslationError } from "../../../../../shared/errors/AppError";
@@ -54,7 +54,6 @@ export class AudioPipeline {
   constructor(
     private readonly asrService: IASRService,
     private readonly translationService: ITranslationService,
-    private readonly correctionEngine: ContextCorrectionEngine,
   ) {}
 
   async start(session: Session): Promise<void> {
@@ -107,11 +106,9 @@ export class AudioPipeline {
       ? this.#session.getContext(5)
       : [];
 
-    // 通过 ContextCorrectionEngine 构建包含上下文和纠错指令的 prompt
-    const prompt = this.correctionEngine.buildPrompt(result.text, context);
-
+    // 传原始文本和上下文给翻译服务，prompt 构建由翻译服务负责
     const translationResult = await this.translationService.translateWithContext({
-      text: prompt.userPrompt,
+      text: result.text,
       context,
     });
 

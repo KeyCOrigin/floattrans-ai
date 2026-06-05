@@ -20,10 +20,13 @@ export interface Dependencies {
 }
 
 export function compose(): Dependencies {
-  // ASR：按 ASR_PROVIDER 环境变量选择
-  const asrService: IASRService = config.asr.provider === "iflytek"
-    ? new IFlytekASRService(config.asr.iflytek!)
-    : new AzureASRService(config.asr.azure!.key, config.asr.azure!.region);
+  // ASR：按 ASR_PROVIDER 环境变量选择（discriminated union，编译期保证字段完整）
+  let asrService: IASRService;
+  if (config.asr.provider === "iflytek") {
+    asrService = new IFlytekASRService(config.asr);
+  } else {
+    asrService = new AzureASRService(config.asr.key, config.asr.region);
+  }
 
   const correctionEngine = new ContextCorrectionEngine();
 
@@ -33,7 +36,8 @@ export function compose(): Dependencies {
     correctionEngine.buildPrompt.bind(correctionEngine),
   );
 
-  const pipeline = new AudioPipeline(asrService, translationService, correctionEngine);
+  // prompt 构建由 translationService 负责，pipeline 只传原始文本
+  const pipeline = new AudioPipeline(asrService, translationService);
   const sessionRepo = new InMemorySessionRepository();
 
   return { asrService, translationService, correctionEngine, pipeline, sessionRepo };

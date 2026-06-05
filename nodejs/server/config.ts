@@ -8,11 +8,10 @@ import type { TranslationProviderConfig } from "./modules/pipeline/domain/Transl
 
 export type ASRProvider = "azure" | "iflytek";
 
-export interface ASRProviderConfig {
-  readonly provider: ASRProvider;
-  readonly azure?: { readonly key: string; readonly region: string };
-  readonly iflytek?: { readonly appId: string; readonly apiKey: string; readonly apiSecret: string };
-}
+// discriminated union：按 provider 字段收窄后，编译期保证字段完整
+export type ASRProviderConfig =
+  | { readonly provider: "azure";  readonly key: string; readonly region: string }
+  | { readonly provider: "iflytek"; readonly appId: string; readonly apiKey: string; readonly apiSecret: string };
 
 // ===== 翻译供应商模板 =====
 
@@ -71,20 +70,16 @@ function readAsrConfig(): ASRProviderConfig {
   if (provider === "iflytek") {
     return {
       provider: "iflytek",
-      iflytek: {
-        appId: readEnv("IFLYTEK_APP_ID"),
-        apiKey: readEnv("IFLYTEK_API_KEY"),
-        apiSecret: readEnv("IFLYTEK_API_SECRET"),
-      },
+      appId: readEnv("IFLYTEK_APP_ID"),
+      apiKey: readEnv("IFLYTEK_API_KEY"),
+      apiSecret: readEnv("IFLYTEK_API_SECRET"),
     };
   }
 
   return {
     provider: "azure",
-    azure: {
-      key: readEnv("AZURE_SPEECH_KEY"),
-      region: readEnv("AZURE_SPEECH_REGION", "eastasia"),
-    },
+    key: readEnv("AZURE_SPEECH_KEY"),
+    region: readEnv("AZURE_SPEECH_REGION", "eastasia"),
   };
 }
 
