@@ -21,13 +21,19 @@ export class SubtitleEngine {
   readonly #originalSegments: ReadonlyArray<{ readonly english: string; readonly chinese: string }>;
 
   constructor(
-    private readonly segments: SubtitleSegment[],
-    private readonly correctionEvents: CorrectionEvent[],
+    segments: readonly SubtitleSegment[],
+    correctionEvents: readonly CorrectionEvent[],
     generateId?: () => string,
   ) {
+    // 深拷贝避免 stop() 修改影响外部引用
+    this.segments = segments.map((s) => ({ ...s }));
+    this.correctionEvents = correctionEvents.map((e) => ({ ...e }));
     this.#generateId = generateId ?? (() => crypto.randomUUID());
     this.#originalSegments = segments.map((s) => ({ english: s.english, chinese: s.chinese }));
   }
+
+  private readonly segments: SubtitleSegment[];
+  private readonly correctionEvents: CorrectionEvent[];
 
   // ===== 播放控制 =====
 
