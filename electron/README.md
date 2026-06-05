@@ -1,81 +1,76 @@
-# FloatTrans AI
+# FloatTrans AI — Electron 前端
 
-> 极简桌面双语同传字幕悬浮助手 Demo
-
-FloatTrans AI 不是传统播放器——它是一个**系统级透明悬浮窗**，在屏幕底部以置顶方式显示双语字幕。用户观看会议、网课或技术分享时，字幕浮在所有窗口之上，不遮挡、不抢焦点、不干扰操作。
+> 项目概述、核心功能和完整结构请见[根 README](../README.md)。
 
 ---
 
-## 核心功能
-
-| 功能 | 说明 |
-|------|------|
-| 桌面悬浮字幕 | 透明、无边框、永远置顶、鼠标穿透、屏幕底部居中 |
-| 双语独立开关 | 英文/中文可分别开启或关闭 |
-| 字幕样式调节 | 透明度、字号（16-64px）、颜色实时可调 |
-| 上下文智能修正 | 根据后文语义自动修正前文识别/翻译错误 |
-| 修正记录追溯 | 控制面板展示每次修正的内容和原因 |
-
----
-
-## 快速开始
+## 快速开始（前端）
 
 ```bash
-# 1. 安装依赖
+# 在此目录下安装前端依赖
 npm install
 
-# 2. 终端一：启动 Vite 开发服务器
+# 终端一：启动 Vite 开发服务器
 npm run dev
 
-# 3. 终端二：启动 Electron
+# 终端二：编译 Electron 主进程 + 启动桌面应用
 npm run electron:dev
 ```
 
-点击控制面板的 **「开始播放」**，桌面底部即出现双语字幕。
+---
+
+## Electron 架构
+
+### 双窗口设计
+
+| 窗口 | 文件 | 特征 |
+|------|------|------|
+| 控制窗口 | `main.ts` → `ControlPanel.tsx` | 380×560, 常规窗口 |
+| 悬浮字幕窗口 | `main.ts` → `OverlaySubtitle.tsx` | 1200×180, transparent, alwaysOnTop, frame:false, skipTaskbar, focusable:false |
+
+IPC 通道：`subtitle:update`（控制窗口 → 主进程 → 悬浮窗口）
+
+### 前端清洁架构
+
+```
+electron/src/
+├── compose.ts                          # 组合根（唯一 new 点）
+├── engine/
+│   └── SubtitleEngine.ts               # 纯逻辑核心（零框架依赖）
+├── components/
+│   ├── ControlPanel.tsx                # 演示/实时双模式控制
+│   ├── OverlaySubtitle.tsx             # 悬浮字幕渲染
+│   └── CorrectionLog.tsx               # 修正记录条目
+├── modules/
+│   ├── audio/
+│   │   ├── domain/IAudioCaptureService.ts    # 音频采集端口
+│   │   └── infrastructure/SystemAudioCapture.ts  # 系统音频实现
+│   ├── session/
+│   │   ├── domain/Session.entity.ts          # 会话实体（状态机）
+│   │   ├── domain/IWebSocketClient.port.ts   # WebSocket 端口
+│   │   ├── application/StartSessionUseCase.ts # 启动会话用例
+│   │   └── infrastructure/WebSocketClient.ts # WebSocket 实现
+│   └── subtitle/
+│       ├── domain/                           # 字幕数据源接口
+│       └── application/ProcessSubtitleUseCase.ts
+├── data/
+│   ├── demoSegments.ts                 # 预置字幕时间轴
+│   └── demoCorrections.ts              # 预置修正事件
+└── types/
+    └── subtitle.ts                     # 字幕类型 SSOT
+```
 
 ---
 
-## 项目结构
+## SubtitleEngine 核心设计
 
-```
-floattrans-ai/
-├── electron/
-│   ├── main.ts          # Electron 主进程：双窗口 + IPC 转发
-│   └── preload.ts       # contextBridge 安全桥接
-├── src/
-│   ├── engine/
-│   │   └── SubtitleEngine.ts   # 核心引擎（纯逻辑，可脱离 Electron 测试）
-│   ├── components/
-│   │   ├── ControlPanel.tsx     # 控制面板
-│   │   ├── OverlaySubtitle.tsx  # 悬浮字幕渲染
-│   │   └── CorrectionLog.tsx    # 修正记录条目
-│   ├── data/
-│   │   ├── demoSegments.ts      # 预置字幕时间轴
-│   │   └── demoCorrections.ts   # 预置修正事件
-│   └── types/
-│       └── subtitle.ts          # 类型定义 SSOT
-├── package.json
-└── README.md
-```
+纯 TypeScript 类，不依赖 React、Electron 或任何浏览器 API。通过 `tick(deltaSeconds)` 驱动时间轴推进，`start(onTick)` 注册回调接收每一帧的字幕和修正事件。
 
----
-
-## Demo 说明
-
-**当前版本使用预置字幕时间轴模拟实时音频流**，不依赖真实 ASR、翻译 API 或后端服务。
-
-演示重点：
-- 实时字幕状态管理与播放
-- 双语字幕独立切换
-- 字幕样式个性化（透明度、字号、颜色）
-- 上下文驱动的历史字幕修正（如 `rest → Rust`）
-
-**未来可扩展**：
-- 接入真实 ASR（Azure Speech / Whisper）
-- 接入实时翻译模型（GPT-4o-mini）
-- 接入系统音频采集（loopback）
-- 支持 SRT / VTT 字幕文件导入
-- 适配会议、网课、直播等场景
+关键能力：
+- 时间轴驱动字幕切换（`#findCurrentSegment()`）
+- 上下文修正自动触发（`#applyDueCorrections()`，根据 `triggerAt` + `applied` 标志）
+- 二次播放完整恢复（`stop()` 通过 `#originalSegments` 还原被修正的文本）
+- 可注入 ID 生成器（测试可控）
 
 ---
 
@@ -87,14 +82,5 @@ floattrans-ai/
 | UI | React 18 + TypeScript (strict) |
 | 构建 | Vite |
 | 样式 | CSS（无框架依赖） |
-| 数据 | 预置时间轴（`demoSegments.ts`） |
-
----
-
-## 答辩文案
-
-> FloatTrans AI 是一个极简桌面双语同传字幕助手。我们没有把它做成复杂播放器，而是设计成系统级悬浮字幕工具。用户只需要点击播放，字幕就会以透明置顶窗口的形式显示在屏幕底部，不干扰用户观看会议、网课或技术分享。
->
-> 当前 Demo 使用预置字幕时间轴模拟实时音频流，重点展示字幕状态管理、双语控制、样式个性化和上下文修正能力。核心引擎 SubtitleEngine 是纯 TypeScript 类，与 React 和 Electron 完全解耦，可在不启动桌面的情况下独立测试。
->
-> 该架构可无缝接入真实 ASR、实时翻译模型和系统音频采集能力。
+| 测试 | Vitest |
+| 音频采集 | Web Audio API (ScriptProcessorNode) |
