@@ -1,23 +1,23 @@
-// GPT4MiniTranslationService.ts — GPT-4o-mini 实现 ITranslationService
-// 封装 OpenAI API 调用，仅负责网络请求与响应解析，不包含业务规则
+// OpenAICompatibleTranslationService.ts — 通用 OpenAI 兼容翻译服务
+// 实现 ITranslationService，支持 OpenAI / DeepSeek / 硅基流动 / 阿里百炼 / 智谱 等
+// 通过构造函数注入 TranslationProviderConfig 切换供应商
 
 import type { ITranslationService, TranslationRequest } from "../domain/ITranslationService.port";
 import type { TranslationResult } from "../domain/TranslationResult.value-object";
 import type { CorrectionSuggestion } from "../domain/CorrectionSuggestion.value-object";
 import type { CorrectionPrompt } from "../domain/ContextCorrectionEngine.service";
+import type { TranslationProviderConfig } from "../domain/TranslationProviderConfig.value-object";
 import type { ContextEntry } from "../domain/ContextEntry.value-object";
 
 interface OpenAIResponse {
   choices: Array<{
-    message: {
-      content: string;
-    };
+    message: { content: string };
   }>;
 }
 
-export class GPT4MiniTranslationService implements ITranslationService {
+export class OpenAICompatibleTranslationService implements ITranslationService {
   constructor(
-    private readonly apiKey: string,
+    private readonly provider: TranslationProviderConfig,
     private readonly buildPrompt: (text: string, context: readonly ContextEntry[]) => CorrectionPrompt,
   ) {}
 
@@ -26,14 +26,14 @@ export class GPT4MiniTranslationService implements ITranslationService {
 
     // 实际部署时取消注释：
     //
-    // const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    // const response = await fetch(this.provider.baseUrl, {
     //   method: "POST",
     //   headers: {
     //     "Content-Type": "application/json",
-    //     "Authorization": `Bearer ${this.apiKey}`,
+    //     "Authorization": `Bearer ${this.provider.apiKey}`,
     //   },
     //   body: JSON.stringify({
-    //     model: "gpt-4o-mini",
+    //     model: this.provider.model,
     //     messages: [
     //       { role: "system", content: prompt.systemPrompt },
     //       { role: "user", content: prompt.userPrompt },
@@ -45,16 +45,15 @@ export class GPT4MiniTranslationService implements ITranslationService {
     //
     // if (!response.ok) {
     //   const body = await response.text().catch(() => "");
-    //   throw new TranslationError(`OpenAI API error: ${response.status} — ${body.slice(0, 200)}`);
+    //   throw new TranslationError(`${this.provider.model} API error: ${response.status} — ${body.slice(0, 200)}`);
     // }
     //
     // const data: OpenAIResponse = await response.json();
     // const content = data.choices[0]?.message?.content ?? "{}";
     // return this.#parseResponse(content, req.text);
 
-    // 当前返回占位结果（编译通过）
     return {
-      translation: `${req.text} (翻译占位)`,
+      translation: `${req.text} (翻译占位 — ${this.provider.model})`,
       corrections: [],
       originalText: req.text,
     };
@@ -83,17 +82,9 @@ export class GPT4MiniTranslationService implements ITranslationService {
         reason: c.reason,
       }));
 
-      return {
-        translation: parsed.translation,
-        corrections,
-        originalText,
-      };
+      return { translation: parsed.translation, corrections, originalText };
     } catch {
-      return {
-        translation: originalText,
-        corrections: [],
-        originalText,
-      };
+      return { translation: originalText, corrections: [], originalText };
     }
   }
 }

@@ -1,20 +1,15 @@
 // AzureASRService.ts — Azure Speech Services 实现 IASRService
 // 封装 Azure Speech SDK，仅负责调用，不包含业务规则
 
-import type { IASRService, ASRConfig } from "../domain/IASRService.port";
-import type { ASRResult } from "../domain/ASRResult.value-object";
+import type { IASRService, ASRConfig, ASRFinalCallback, ASRPartialCallback, ASRErrorCallback } from "../domain/IASRService.port";
 
 // 注意：运行时需要安装 microsoft-cognitiveservices-speech-sdk
 // npm install microsoft-cognitiveservices-speech-sdk
 
-type FinalCallback = (result: ASRResult) => void;
-type PartialCallback = (text: string) => void;
-type ErrorCallback = (error: Error) => void;
-
 export class AzureASRService implements IASRService {
-  #onFinal: FinalCallback | null = null;
-  #onPartial: PartialCallback | null = null;
-  #onError: ErrorCallback | null = null;
+  #onFinal: ASRFinalCallback | null = null;
+  #onPartial: ASRPartialCallback | null = null;
+  #onError: ASRErrorCallback | null = null;
   #isRecognizing = false;
 
   constructor(
@@ -80,15 +75,7 @@ export class AzureASRService implements IASRService {
     // 实际部署：await recognizer.stopContinuousRecognitionAsync();
   }
 
-  onFinalResult(cb: FinalCallback): void {
-    this.#onFinal = cb;
-  }
-
-  onPartialResult(cb: PartialCallback): void {
-    this.#onPartial = cb;
-  }
-
-  onError(cb: ErrorCallback): void {
-    this.#onError = cb;
-  }
+  onFinalResult(cb: ASRFinalCallback): void { this.#onFinal = cb; }
+  onPartialResult(cb: ASRPartialCallback): void { this.#onPartial = cb; }
+  onError(cb: ASRErrorCallback): void { this.#onError = cb; }
 }
