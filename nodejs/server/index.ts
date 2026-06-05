@@ -1,6 +1,7 @@
 // server/index.ts — 后端入口
 // 职责：启动 WebSocket 服务器，装配依赖
 
+import "dotenv/config";
 import { WebSocketServer } from "ws";
 import { config } from "./config";
 import { compose } from "./compose";
