@@ -4,7 +4,8 @@
 import { AudioPipeline } from "./modules/pipeline/domain/AudioPipeline.service";
 import { ContextCorrectionEngine } from "./modules/pipeline/domain/ContextCorrectionEngine.service";
 import { AzureASRService } from "./modules/pipeline/infrastructure/AzureASRService";
-import { GPT4MiniTranslationService } from "./modules/pipeline/infrastructure/GPT4MiniTranslationService";
+import { IFlytekASRService } from "./modules/pipeline/infrastructure/IFlytekASRService";
+import { OpenAICompatibleTranslationService } from "./modules/pipeline/infrastructure/OpenAICompatibleTranslationService";
 import { InMemorySessionRepository } from "./modules/session/infrastructure/InMemorySessionRepository";
 import { config } from "./config";
 import type { IASRService } from "./modules/pipeline/domain/IASRService.port";
@@ -19,20 +20,21 @@ export interface Dependencies {
 }
 
 export function compose(): Dependencies {
-  const asrService = new AzureASRService(config.azure.key, config.azure.region);
+  // ASR：按 ASR_PROVIDER 环境变量选择
+  const asrService: IASRService = config.asr.provider === "iflytek"
+    ? new IFlytekASRService(config.asr.iflytek!)
+    : new AzureASRService(config.asr.azure!.key, config.asr.azure!.region);
+
   const correctionEngine = new ContextCorrectionEngine();
-  const translationService = new GPT4MiniTranslationService(
-    config.openai.key,
+
+  // 翻译：通用 OpenAI 兼容服务，按 TRANSLATION_PROVIDER 切换供应商
+  const translationService: ITranslationService = new OpenAICompatibleTranslationService(
+    config.translation,
     correctionEngine.buildPrompt.bind(correctionEngine),
   );
+
   const pipeline = new AudioPipeline(asrService, translationService, correctionEngine);
   const sessionRepo = new InMemorySessionRepository();
 
-  return {
-    asrService,
-    translationService,
-    correctionEngine,
-    pipeline,
-    sessionRepo,
-  };
+  return { asrService, translationService, correctionEngine, pipeline, sessionRepo };
 }

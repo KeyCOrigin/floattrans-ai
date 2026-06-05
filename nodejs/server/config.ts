@@ -2,21 +2,48 @@
 // 整个系统中只有这个文件直接访问 process.env
 
 import { ValidationError } from "../../shared/errors/AppError";
+import type { TranslationProviderConfig } from "./modules/pipeline/domain/TranslationProviderConfig.value-object";
+
+// ===== ASR 供应商 =====
+
+export type ASRProvider = "azure" | "iflytek";
+
+export interface ASRProviderConfig {
+  readonly provider: ASRProvider;
+  readonly azure?: { readonly key: string; readonly region: string };
+  readonly iflytek?: { readonly appId: string; readonly apiKey: string; readonly apiSecret: string };
+}
+
+// ===== 翻译供应商模板 =====
+
+export type TranslationProviderId = "openai" | "deepseek" | "siliconflow" | "bailian" | "zhipu";
+
+const TRANSLATION_TEMPLATES: Record<TranslationProviderId, Omit<TranslationProviderConfig, "apiKey">> = {
+  openai:       { baseUrl: "https://api.openai.com/v1/chat/completions",          model: "gpt-4o-mini" },
+  deepseek:     { baseUrl: "https://api.deepseek.com/v1/chat/completions",         model: "deepseek-chat" },
+  siliconflow:  { baseUrl: "https://api.siliconflow.cn/v1/chat/completions",       model: "deepseek-ai/DeepSeek-V3" },
+  bailian:      { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", model: "qwen-plus" },
+  zhipu:        { baseUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions", model: "glm-4-flash" },
+};
+
+// 各供应商对应的 API Key 环境变量名
+const TRANSLATION_KEY_ENV: Record<TranslationProviderId, string> = {
+  openai:       "OPENAI_API_KEY",
+  deepseek:     "DEEPSEEK_API_KEY",
+  siliconflow:  "SILICONFLOW_API_KEY",
+  bailian:      "BAILIAN_API_KEY",
+  zhipu:        "ZHIPU_API_KEY",
+};
+
+// ===== 应用配置 =====
 
 export interface AppConfig {
-  readonly asrProvider: "azure" | "iflytek";
-  readonly translationProvider: "openai" | "deepseek";
-  readonly azure: {
-    readonly key: string;
-    readonly region: string;
-  };
-  readonly openai: {
-    readonly key: string;
-  };
-  readonly server: {
-    readonly port: number;
-  };
+  readonly asr: ASRProviderConfig;
+  readonly translation: TranslationProviderConfig;
+  readonly server: { readonly port: number };
 }
+
+// ===== 工具函数 =====
 
 function readEnv(key: string, fallback?: string): string {
   const value = process.env[key];
@@ -27,17 +54,6 @@ function readEnv(key: string, fallback?: string): string {
   return value;
 }
 
-function readProviderEnv(key: string, allowed: readonly string[], fallback: string): string {
-  const raw = process.env[key];
-  if (raw === undefined) return fallback;
-  if (!allowed.includes(raw)) {
-    throw new ValidationError(
-      `Invalid ${key}=${raw}. Allowed values: ${allowed.join(", ")}`,
-    );
-  }
-  return raw;
-}
-
 function parsePort(raw: string): number {
   const port = parseInt(raw, 10);
   if (isNaN(port) || port < 1 || port > 65535) {
@@ -46,17 +62,46 @@ function parsePort(raw: string): number {
   return port;
 }
 
+// ===== 组装 =====
+
+function readAsrConfig(): ASRProviderConfig {
+  const raw = process.env["ASR_PROVIDER"];
+  const provider = (raw === "azure" || raw === "iflytek") ? raw : "azure";
+
+  if (provider === "iflytek") {
+    return {
+      provider: "iflytek",
+      iflytek: {
+        appId: readEnv("IFLYTEK_APP_ID"),
+        apiKey: readEnv("IFLYTEK_API_KEY"),
+        apiSecret: readEnv("IFLYTEK_API_SECRET"),
+      },
+    };
+  }
+
+  return {
+    provider: "azure",
+    azure: {
+      key: readEnv("AZURE_SPEECH_KEY"),
+      region: readEnv("AZURE_SPEECH_REGION", "eastasia"),
+    },
+  };
+}
+
+function readTranslationConfig(): TranslationProviderConfig {
+  const raw = process.env["TRANSLATION_PROVIDER"];
+  const allowed = Object.keys(TRANSLATION_TEMPLATES) as TranslationProviderId[];
+  const provider = (allowed as string[]).includes(raw ?? "") ? (raw as TranslationProviderId) : "openai";
+
+  const template = TRANSLATION_TEMPLATES[provider];
+  const keyEnv = TRANSLATION_KEY_ENV[provider];
+  const apiKey = readEnv(keyEnv);
+
+  return { ...template, apiKey };
+}
+
 export const config: AppConfig = {
-  asrProvider: readProviderEnv("ASR_PROVIDER", ["azure", "iflytek"], "azure") as "azure" | "iflytek",
-  translationProvider: readProviderEnv("TRANSLATION_PROVIDER", ["openai", "deepseek"], "openai") as "openai" | "deepseek",
-  azure: {
-    key: readEnv("AZURE_SPEECH_KEY"),
-    region: readEnv("AZURE_SPEECH_REGION", "eastasia"),
-  },
-  openai: {
-    key: readEnv("OPENAI_API_KEY"),
-  },
-  server: {
-    port: parsePort(readEnv("SERVER_PORT", "3001")),
-  },
+  asr: readAsrConfig(),
+  translation: readTranslationConfig(),
+  server: { port: parsePort(readEnv("SERVER_PORT", "3001")) },
 };
