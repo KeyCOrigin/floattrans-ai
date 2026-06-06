@@ -15,7 +15,7 @@ export type ASRProviderConfig =
 
 // ===== 翻译供应商模板 =====
 
-export type TranslationProviderId = "openai" | "deepseek" | "siliconflow" | "bailian" | "zhipu";
+export type TranslationProviderId = "openai" | "deepseek" | "siliconflow" | "bailian" | "zhipu" | "spark";
 
 const TRANSLATION_TEMPLATES: Record<TranslationProviderId, Omit<TranslationProviderConfig, "apiKey">> = {
   openai:       { baseUrl: "https://api.openai.com/v1/chat/completions",          model: "gpt-4o-mini" },
@@ -23,6 +23,7 @@ const TRANSLATION_TEMPLATES: Record<TranslationProviderId, Omit<TranslationProvi
   siliconflow:  { baseUrl: "https://api.siliconflow.cn/v1/chat/completions",       model: "deepseek-ai/DeepSeek-V3" },
   bailian:      { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", model: "qwen-plus" },
   zhipu:        { baseUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions", model: "glm-4-flash" },
+  spark:        { baseUrl: "https://spark-api-open.xf-yun.com/agent/v1/chat/completions", model: "spark-x2-flash" },
 };
 
 // 各供应商对应的 API Key 环境变量名
@@ -32,6 +33,7 @@ const TRANSLATION_KEY_ENV: Record<TranslationProviderId, string> = {
   siliconflow:  "SILICONFLOW_API_KEY",
   bailian:      "BAILIAN_API_KEY",
   zhipu:        "ZHIPU_API_KEY",
+  spark:        "SPARK_API_KEY",
 };
 
 // ===== 应用配置 =====

@@ -10,6 +10,17 @@ import type { Session } from "../../session/domain/Session.entity";
 import type { PipelineOutputPort } from "./PipelineOutputPort.port";
 import { TranslationError } from "../../../../../shared/errors/AppError";
 
+/** 翻译防抖延迟（ms）：说话停顿后等待此时间再触发翻译 */
+const TRANSLATION_DEBOUNCE_MS = 1200;
+/** 增量翻译阈值（字符数）：文本新增超过此长度立即翻译 */
+const TRANSLATION_CHAR_THRESHOLD = 50;
+/** 单次翻译超时（ms）：超过此时间视为翻译失败 */
+const TRANSLATION_TIMEOUT_MS = 15000;
+/** 部分结果翻译时使用的默认置信度 */
+const PARTIAL_TRANSLATION_CONFIDENCE = 0.85;
+/** 孤立标点：这些字符不触发翻译 */
+const IGNORED_PUNCTUATION = new Set([".", "。"]);
+
 export type PipelineCallback = (segment: {
   readonly segmentId: string;
   readonly english: string;
@@ -53,6 +64,15 @@ export class AudioPipeline {
   #session: Session | null = null;
   #output: PipelineOutputPort | null = null;
 
+  /** 部分翻译节流状态：记录上次翻译的文本，避免重复翻译 */
+  #lastTranslatedText = "";
+  /** 当前累积的部分文本（ASR 每次 onPartial 携带完整累计文本） */
+  #currentPartialText = "";
+  /** 翻译防抖定时器：说话停顿 1.2s 后触发翻译 */
+  #translationDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 防止并发翻译 */
+  #isTranslating = false;
+
   constructor(
     private readonly asrService: IASRService,
     private readonly translationService: ITranslationService,
@@ -79,13 +99,22 @@ export class AudioPipeline {
   ): void {
     this.asrService.onPartialResult((text) => {
       onPartial(text, Date.now());
+      this.#schedulePartialTranslation(text, onSegment, onError);
     });
 
     this.asrService.onFinalResult(async (result: ASRResult) => {
       try {
-        const segment = await this.#processFinalResult(result);
-        if (segment) {
-          onSegment(segment);
+        if (this.#translationDebounceTimer) {
+          clearTimeout(this.#translationDebounceTimer);
+          this.#translationDebounceTimer = null;
+        }
+        const text = result.text;
+        if (text && !IGNORED_PUNCTUATION.has(text) && text !== this.#lastTranslatedText) {
+          const segment = await this.#processFinalResult({ ...result, text });
+          if (segment) {
+            this.#lastTranslatedText = text;
+            onSegment(segment);
+          }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -99,12 +128,101 @@ export class AudioPipeline {
     });
   }
 
+  /**
+   * 节流翻译调度：
+   * - 正在翻译时一律延迟（避免并发覆盖）
+   * - 文本增长 ≥ 阈值时立即翻译
+   * - 否则启动防抖定时器（说话停顿后翻译）
+   */
+  #schedulePartialTranslation(
+    text: string,
+    onSegment: PipelineCallback,
+    onError: ErrorCallback,
+  ): void {
+    this.#currentPartialText = text;
+
+    if (this.#translationDebounceTimer) {
+      clearTimeout(this.#translationDebounceTimer);
+    }
+
+    // 正在翻译中 → 始终设置定时器等待当前翻译完成
+    if (this.#isTranslating) {
+      this.#translationDebounceTimer = setTimeout(() => {
+        this.#translationDebounceTimer = null;
+        this.#executePartialTranslation(this.#currentPartialText, onSegment, onError);
+      }, TRANSLATION_DEBOUNCE_MS);
+      return;
+    }
+
+    const newChars = text.length - this.#lastTranslatedText.length;
+
+    if (newChars >= TRANSLATION_CHAR_THRESHOLD) {
+      this.#executePartialTranslation(text, onSegment, onError);
+      return;
+    }
+
+    this.#translationDebounceTimer = setTimeout(() => {
+      this.#translationDebounceTimer = null;
+      this.#executePartialTranslation(this.#currentPartialText, onSegment, onError);
+    }, TRANSLATION_DEBOUNCE_MS);
+  }
+
+  async #executePartialTranslation(
+    text: string,
+    onSegment: PipelineCallback,
+    onError: ErrorCallback,
+  ): Promise<void> {
+    if (!text || text === this.#lastTranslatedText || this.#isTranslating) return;
+
+    this.#isTranslating = true;
+    try {
+      const segment = await this.#translateWithTimeout(text);
+      if (segment) {
+        this.#lastTranslatedText = text;
+        onSegment(segment);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      onError(new TranslationError(message));
+    } finally {
+      this.#isTranslating = false;
+    }
+  }
+
+  /** 带超时保护的翻译调用 */
+  async #translateWithTimeout(text: string): Promise<PipelineSegment> {
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new TranslationError(`Translation timed out after ${TRANSLATION_TIMEOUT_MS}ms`)),
+        TRANSLATION_TIMEOUT_MS,
+      );
+    });
+
+    return Promise.race([
+      this.#processFinalResult({
+        text,
+        isFinal: false,
+        confidence: PARTIAL_TRANSLATION_CONFIDENCE,
+        startTime: 0,
+        endTime: 0,
+      }),
+      timeout,
+    ]);
+  }
+
   pushAudio(chunk: ArrayBuffer): void {
     this.asrService.pushAudio(chunk);
   }
 
   async stop(): Promise<void> {
     this.#session = null;
+    // 清理翻译防抖定时器与状态
+    if (this.#translationDebounceTimer) {
+      clearTimeout(this.#translationDebounceTimer);
+      this.#translationDebounceTimer = null;
+    }
+    this.#lastTranslatedText = "";
+    this.#currentPartialText = "";
     await this.asrService.stopRecognition();
   }
 
