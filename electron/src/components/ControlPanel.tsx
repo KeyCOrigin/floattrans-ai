@@ -10,7 +10,11 @@ import {
 } from "../types/subtitle";
 import { composeFrontend } from "../compose";
 import type { FrontendSession } from "../modules/session/domain/Session.entity";
-import type { InputMode, SubtitleEvent } from "../modules/session/application/StartSessionUseCase";
+import type {
+  InputMode,
+  SubtitleEvent,
+  DanmakuCallbacks,
+} from "../modules/session/application/StartSessionUseCase";
 import type { AudioDevice } from "../modules/audio/domain/AudioDevice.value-object";
 import "../styles/control.css";
 
@@ -44,6 +48,18 @@ export function ControlPanel() {
   const [subtitleColor, setSubtitleColor] = useState(defaultSettings.subtitleColor);
   const [autoCorrection, setAutoCorrection] = useState(defaultSettings.autoCorrectionEnabled);
 
+  // 叠加窗口尺寸
+  const [overlayWidth, setOverlayWidth] = useState(800);
+  const [overlayHeight, setOverlayHeight] = useState(400);
+
+  const handleResizeOverlay = useCallback((w: number, h: number) => {
+    const cw = Math.max(400, Math.min(1920, w));
+    const ch = Math.max(100, Math.min(1080, h));
+    setOverlayWidth(cw);
+    setOverlayHeight(ch);
+    window.electronAPI?.resizeOverlay?.(cw, ch);
+  }, []);
+
   // 实时模式状态
   const [inputMode, setInputMode] = useState<InputMode>("demo");
   const [devices, setDevices] = useState<AudioDevice[]>([]);
@@ -64,6 +80,13 @@ export function ControlPanel() {
   useEffect(() => {
     engineRef.current?.setAutoCorrection(autoCorrection);
   }, [autoCorrection]);
+
+  // 样式同步：ControlPanel 任何样式变更 → 立刻推送到 overlay 弹幕
+  useEffect(() => {
+    window.electronAPI?.applyOverlayStyle?.({
+      showEnglish, showChinese, opacity, fontSize, subtitleColor,
+    });
+  }, [showEnglish, showChinese, opacity, fontSize, subtitleColor]);
 
   const emitSubtitle = useCallback(
     (segment: SubtitleSegment | null) => {
@@ -88,6 +111,10 @@ export function ControlPanel() {
 
   /** 保留最近一次 final 的中文翻译，避免 partial 覆盖导致闪烁 */
   const lastChineseRef = useRef<string>("");
+  /** 已推入弹幕的 segment ID 集合，避免 tick 重复推送 */
+  const danmakuPushedRef = useRef<Set<string>>(new Set());
+  /** 实时模式：跟踪当前 partial 的弹幕 ID，确保 final 时 update 同一条目 */
+  const liveDanmakuIdRef = useRef<string>("");
 
   // === Demo 模式 ===
 
@@ -95,12 +122,34 @@ export function ControlPanel() {
     const engine = engineRef.current;
     if (!engine) return;
     if (timerRef.current !== null) { clearInterval(timerRef.current); timerRef.current = null; }
+    danmakuPushedRef.current.clear();
     engine.start((result) => {
-      setCurrentSubtitle(result.currentSegment);
+      const seg = result.currentSegment;
+      setCurrentSubtitle(seg);
+      // 弹幕推送：首次出现的 segment
+      if (seg && !danmakuPushedRef.current.has(seg.id)) {
+        danmakuPushedRef.current.add(seg.id);
+        window.electronAPI?.danmakuPush?.({
+          id: seg.id,
+          english: seg.english,
+          chinese: seg.chinese,
+          status: seg.status === "revised" ? "corrected"
+                : seg.status === "final" ? "final" : "draft",
+          confidence: seg.confidence ?? 0.9,
+        });
+      }
+      // 弹幕修正
       if (result.newCorrections.length > 0) {
         setCorrectionLogs((prev) => [...prev, ...result.newCorrections]);
+        for (const corr of result.newCorrections) {
+          window.electronAPI?.danmakuCorrect?.({
+            id: corr.segmentId,
+            oldChinese: corr.oldChinese,
+            newChinese: corr.newChinese,
+          });
+        }
       }
-      emitSubtitleRef.current(result.currentSegment);
+      emitSubtitleRef.current(seg);
     });
     setIsPlaying(true);
     timerRef.current = window.setInterval(() => { engineRef.current?.tick(0.1); }, 100);
@@ -118,6 +167,8 @@ export function ControlPanel() {
     setIsPlaying(false);
     setCurrentSubtitle(null);
     setCorrectionLogs([]);
+    danmakuPushedRef.current.clear();
+    window.electronAPI?.danmakuClear?.();
     emitSubtitle(null);
   };
 
@@ -149,6 +200,15 @@ export function ControlPanel() {
       handleRefreshDevices();
       return;
     }
+    // 弹幕回调：转发到 Electron 覆盖窗口
+    const danmakuCallbacks: DanmakuCallbacks = {
+      onDanmakuPush: (p) => window.electronAPI?.danmakuPush?.(p),
+      onDanmakuUpdate: (p) => window.electronAPI?.danmakuUpdate?.(p),
+      onDanmakuCorrect: (p) => window.electronAPI?.danmakuCorrect?.(p),
+      onDanmakuEvict: (p) => window.electronAPI?.danmakuEvict?.(p),
+      onDanmakuClear: () => window.electronAPI?.danmakuClear?.(),
+    };
+
     const result = await deps.startSessionUseCase.execute(
       inputMode,
       "ws://localhost:3001",
@@ -161,7 +221,6 @@ export function ControlPanel() {
         }
       },
       (subtitle: SubtitleEvent) => {
-        // partial 不含中文：保留上一次 final 的中文翻译，避免闪烁
         const chineseText = subtitle.isFinal ? subtitle.chinese : lastChineseRef.current;
         if (subtitle.isFinal && subtitle.chinese) {
           lastChineseRef.current = subtitle.chinese;
@@ -177,7 +236,36 @@ export function ControlPanel() {
         };
         setCurrentSubtitle(seg);
         emitSubtitleRef.current(seg);
+
+        // 同时推送到弹幕 overlay（麦克风/系统音频模式）
+        // segmentId 优先；无 segmentId 时用 ref 保证 partial/final 使用同一 ID
+        const danmakuId = subtitle.segmentId
+          ?? (subtitle.isFinal ? liveDanmakuIdRef.current : `live_${Date.now()}`);
+        if (!subtitle.isFinal && !subtitle.segmentId) {
+          liveDanmakuIdRef.current = danmakuId;
+        }
+        if (subtitle.isFinal) {
+          if (danmakuId) {
+            window.electronAPI?.danmakuUpdate?.({ id: danmakuId, chinese: subtitle.chinese, isComplete: true });
+          } else {
+            // 无 prior partial，直接 push 一条 final 弹幕
+            const fallbackId = `live_${Date.now()}`;
+            window.electronAPI?.danmakuPush?.({
+              id: fallbackId, english: subtitle.english, chinese: subtitle.chinese,
+              status: "final", confidence: subtitle.confidence,
+            });
+          }
+        } else {
+          window.electronAPI?.danmakuPush?.({
+            id: danmakuId,
+            english: subtitle.english,
+            chinese: "",
+            status: "draft",
+            confidence: subtitle.confidence,
+          });
+        }
       },
+      danmakuCallbacks,
     );
     if (result.ok) {
       liveSessionRef.current = result.data;
@@ -196,7 +284,9 @@ export function ControlPanel() {
     setCurrentSubtitle(null);
     setLiveError(null);
     lastChineseRef.current = "";
+    liveDanmakuIdRef.current = "";
     emitSubtitleRef.current(null);
+    window.electronAPI?.danmakuClear?.();
   };
 
   const handleModeSwitch = (newMode: AppMode) => {
@@ -293,6 +383,18 @@ export function ControlPanel() {
           <label>颜色</label>
           <input type="color" value={subtitleColor} onChange={(e) => setSubtitleColor(e.target.value)} />
           <span className="color-value">{subtitleColor}</span>
+        </div>
+      </section>
+
+      <section className="control-section">
+        <h3>叠加窗口</h3>
+        <div className="slider-group">
+          <label>宽度 <span>{overlayWidth}px</span></label>
+          <input type="range" min={400} max={1920} step={40} value={overlayWidth} onChange={(e) => handleResizeOverlay(Number(e.target.value), overlayHeight)} />
+        </div>
+        <div className="slider-group">
+          <label>高度 <span>{overlayHeight}px</span></label>
+          <input type="range" min={100} max={1080} step={20} value={overlayHeight} onChange={(e) => handleResizeOverlay(overlayWidth, Number(e.target.value))} />
         </div>
       </section>
 

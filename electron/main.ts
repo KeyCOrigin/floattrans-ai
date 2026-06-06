@@ -34,14 +34,16 @@ function createOverlayWindow(): void {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
   overlayWindow = new BrowserWindow({
-    width: 1200,
-    height: 180,
-    x: Math.floor((width - 1200) / 2),
-    y: height - 220,
+    width: 800,
+    height: 400,
+    minWidth: 400,
+    minHeight: 100,
+    x: Math.floor((width - 800) / 2),
+    y: height - 440,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
-    resizable: false,
+    resizable: true,
     skipTaskbar: true,
     focusable: false,
     webPreferences: {
@@ -51,7 +53,13 @@ function createOverlayWindow(): void {
     },
   });
 
-  overlayWindow.setIgnoreMouseEvents(true);
+  // 崩溃诊断
+  overlayWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[overlay] render-process-gone:", details.reason, details.exitCode);
+  });
+  overlayWindow.on("closed", () => {
+    overlayWindow = null;
+  });
 
   if (isDev) {
     overlayWindow.loadURL("http://localhost:5173/overlay.html");
@@ -68,7 +76,59 @@ ipcMain.on("subtitle:update", (_event, payload) => {
   }
 });
 
+// 弹幕 IPC 转发
+const DANMAKU_CHANNELS = [
+  "danmaku:push",
+  "danmaku:update",
+  "danmaku:correct",
+  "danmaku:evict",
+  "danmaku:clear",
+] as const;
+
+for (const channel of DANMAKU_CHANNELS) {
+  ipcMain.on(channel, (_event, payload) => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send(channel, payload);
+    }
+  });
+}
+
+// Click-through 切换：overlay 窗口鼠标穿透开关
+ipcMain.on("overlay:setClickThrough", (_event, enabled: boolean) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.setIgnoreMouseEvents(enabled);
+  }
+});
+
+// 叠加窗口大小控制
+ipcMain.on("overlay:resize", (_event, width: number, height: number) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.setSize(Math.round(width), Math.round(height));
+  }
+});
+
+// 样式同步：控制面板 → 叠加窗口
+ipcMain.on("overlay:applyStyle", (_event, payload) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send("overlay:applyStyle", payload);
+  }
+});
+
 app.whenReady().then(() => {
+  // CSP：通过 session API 设置才能被 Electron 安全系统识别，消除控制台警告
+  if (isDev) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          "Content-Security-Policy": [
+            "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* http://localhost:*; img-src 'self' data:; font-src 'self' data:",
+          ],
+        },
+      });
+    });
+  }
+
   // 媒体权限：允许麦克风/虚拟声卡采集
   session.defaultSession.setPermissionRequestHandler(
     (_webContents, permission, callback) => {

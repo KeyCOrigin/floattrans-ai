@@ -3,6 +3,8 @@
 
 import { AudioPipeline } from "./modules/pipeline/domain/AudioPipeline.service";
 import { ContextCorrectionEngine } from "./modules/pipeline/domain/ContextCorrectionEngine.service";
+import { SpeechTextNormalizer } from "./modules/pipeline/domain/SpeechTextNormalizer.service";
+import { AdaptiveDebounceEngine } from "./modules/pipeline/domain/AdaptiveDebounceEngine.service";
 import { AzureASRService } from "./modules/pipeline/infrastructure/AzureASRService";
 import { IFlytekASRService } from "./modules/pipeline/infrastructure/IFlytekASRService";
 import { OpenAICompatibleTranslationService } from "./modules/pipeline/infrastructure/OpenAICompatibleTranslationService";
@@ -36,8 +38,12 @@ export function compose(): Dependencies {
     correctionEngine.buildPrompt.bind(correctionEngine),
   );
 
+  // 文本归一化 + 自适应防抖
+  const normalizer = new SpeechTextNormalizer();
+  const debounceEngine = new AdaptiveDebounceEngine();
+
   // prompt 构建由 translationService 负责，pipeline 只传原始文本
-  const pipeline = new AudioPipeline(asrService, translationService);
+  const pipeline = new AudioPipeline(asrService, translationService, normalizer, debounceEngine);
   const sessionRepo = new InMemorySessionRepository();
 
   return { asrService, translationService, correctionEngine, pipeline, sessionRepo };

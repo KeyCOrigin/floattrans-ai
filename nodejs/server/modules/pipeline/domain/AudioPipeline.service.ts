@@ -1,25 +1,25 @@
 // AudioPipeline.service.ts — 音频管道领域服务
-// 职责：接收音频帧 → 调 ASR → 调 LLM → 生成字幕片段与修正
+// 职责：接收音频帧 → 归一化 → 自适应防抖 → 调翻译 → 弹幕输出
 // 不持有业务状态（状态在 Session 中），仅持有会话引用用于上下文查询
-// prompt 构建职责全部委托给 ITranslationService，管道只传原始文本
 
 import type { IASRService } from "./IASRService.port";
 import type { ITranslationService } from "./ITranslationService.port";
 import type { ASRResult } from "./ASRResult.value-object";
 import type { Session } from "../../session/domain/Session.entity";
-import type { PipelineOutputPort } from "./PipelineOutputPort.port";
+import type { PipelineOutputPort, DanmakuEntrySnapshot } from "./PipelineOutputPort.port";
+import type { ISpeechTextNormalizer } from "./ISpeechTextNormalizer.port";
+import type { IAdaptiveDebounceStrategy } from "./IAdaptiveDebounceStrategy.port";
+import type { SpeechMetrics } from "./SpeechMetrics.value-object";
 import { TranslationError } from "../../../../../shared/errors/AppError";
 
-/** 翻译防抖延迟（ms）：说话停顿后等待此时间再触发翻译 */
-const TRANSLATION_DEBOUNCE_MS = 1200;
-/** 增量翻译阈值（字符数）：文本新增超过此长度立即翻译 */
-const TRANSLATION_CHAR_THRESHOLD = 50;
-/** 单次翻译超时（ms）：超过此时间视为翻译失败 */
+/** 单次翻译超时（ms） */
 const TRANSLATION_TIMEOUT_MS = 15000;
-/** 部分结果翻译时使用的默认置信度 */
+/** 部分翻译置信度 */
 const PARTIAL_TRANSLATION_CONFIDENCE = 0.85;
-/** 孤立标点：这些字符不触发翻译 */
-const IGNORED_PUNCTUATION = new Set([".", "。"]);
+/** 语速计算滑窗大小（最近 N 次 partial） */
+const SPEECH_RATE_WINDOW = 3;
+/** 弹幕池最大条目数 */
+const MAX_DANMAKU_ENTRIES = 10;
 
 export type PipelineCallback = (segment: {
   readonly segmentId: string;
@@ -64,24 +64,36 @@ export class AudioPipeline {
   #session: Session | null = null;
   #output: PipelineOutputPort | null = null;
 
-  /** 部分翻译节流状态：记录上次翻译的文本，避免重复翻译 */
+  /** 上次翻译的文本 */
   #lastTranslatedText = "";
-  /** 当前累积的部分文本（ASR 每次 onPartial 携带完整累计文本） */
+  /** 当前累积的 partial 文本 */
   #currentPartialText = "";
-  /** 翻译防抖定时器：说话停顿 1.2s 后触发翻译 */
-  #translationDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 翻译防抖定时器 */
+  #debounceTimer: ReturnType<typeof setTimeout> | null = null;
   /** 防止并发翻译 */
   #isTranslating = false;
+
+  /** 语速滑窗：记录最近 N 次 partial 的时间戳和文本长度 */
+  #speechRateSamples: Array<{ time: number; length: number }> = [];
+
+  /** 当前弹幕池条目数 */
+  #danmakuCount = 0;
 
   constructor(
     private readonly asrService: IASRService,
     private readonly translationService: ITranslationService,
+    private readonly normalizer: ISpeechTextNormalizer,
+    private readonly debounceEngine: IAdaptiveDebounceStrategy,
   ) {}
 
   async start(session: Session, output: PipelineOutputPort): Promise<void> {
     this.#session = session;
     this.#output = output;
     this.#segmentCounter = 0;
+    this.#danmakuCount = 0;
+    this.#lastTranslatedText = "";
+    this.#currentPartialText = "";
+    this.#speechRateSamples = [];
     output.sendStatus("asr_connecting");
     this.asrService.onReady(() => {
       output.sendStatus("asr_connected");
@@ -97,22 +109,31 @@ export class AudioPipeline {
     onPartial: PartialCallback,
     onError: ErrorCallback,
   ): void {
-    this.asrService.onPartialResult((text) => {
-      onPartial(text, Date.now());
-      this.#schedulePartialTranslation(text, onSegment, onError);
+    this.asrService.onPartialResult((rawText) => {
+      // 1) 归一化
+      const norm = this.normalizer.normalizeForTranslation(rawText);
+      // 2) 即时推送英文 partial 到前端
+      onPartial(norm.normalized, Date.now());
+      // 3) 自适应防抖决策
+      this.#scheduleTranslation(norm.normalized, onSegment, onError);
+      // 4) 更新语速统计
+      this.#recordSpeechSample(rawText.length);
     });
 
     this.asrService.onFinalResult(async (result: ASRResult) => {
       try {
-        if (this.#translationDebounceTimer) {
-          clearTimeout(this.#translationDebounceTimer);
-          this.#translationDebounceTimer = null;
+        if (this.#debounceTimer) {
+          clearTimeout(this.#debounceTimer);
+          this.#debounceTimer = null;
         }
-        const text = result.text;
-        if (text && !IGNORED_PUNCTUATION.has(text) && text !== this.#lastTranslatedText) {
-          const segment = await this.#processFinalResult({ ...result, text });
+        const norm = this.normalizer.normalizeForTranslation(result.text);
+        if (norm.normalized && norm.normalized !== this.#lastTranslatedText) {
+          const segment = await this.#processFinalResult({
+            ...result,
+            text: norm.normalized,
+          });
           if (segment) {
-            this.#lastTranslatedText = text;
+            this.#lastTranslatedText = norm.normalized;
             onSegment(segment);
           }
         }
@@ -128,46 +149,42 @@ export class AudioPipeline {
     });
   }
 
-  /**
-   * 节流翻译调度：
-   * - 正在翻译时一律延迟（避免并发覆盖）
-   * - 文本增长 ≥ 阈值时立即翻译
-   * - 否则启动防抖定时器（说话停顿后翻译）
-   */
-  #schedulePartialTranslation(
+  /** 自适应防抖 + 翻译调度 */
+  #scheduleTranslation(
     text: string,
     onSegment: PipelineCallback,
     onError: ErrorCallback,
   ): void {
     this.#currentPartialText = text;
+    if (this.#debounceTimer) clearTimeout(this.#debounceTimer);
 
-    if (this.#translationDebounceTimer) {
-      clearTimeout(this.#translationDebounceTimer);
-    }
-
-    // 正在翻译中 → 始终设置定时器等待当前翻译完成
+    // 正在翻译 → 延迟等待
     if (this.#isTranslating) {
-      this.#translationDebounceTimer = setTimeout(() => {
-        this.#translationDebounceTimer = null;
-        this.#executePartialTranslation(this.#currentPartialText, onSegment, onError);
-      }, TRANSLATION_DEBOUNCE_MS);
+      this.#debounceTimer = setTimeout(() => {
+        this.#debounceTimer = null;
+        this.#executeTranslation(this.#currentPartialText, onSegment, onError);
+      }, 300);
       return;
     }
 
-    const newChars = text.length - this.#lastTranslatedText.length;
+    const metrics = this.#computeSpeechMetrics(text);
+    const decision = this.debounceEngine.decide(text, this.#lastTranslatedText, metrics);
 
-    if (newChars >= TRANSLATION_CHAR_THRESHOLD) {
-      this.#executePartialTranslation(text, onSegment, onError);
+    if (!decision.shouldTranslate) return;
+
+    if (decision.debounceMs === 0) {
+      this.#executeTranslation(text, onSegment, onError);
       return;
     }
 
-    this.#translationDebounceTimer = setTimeout(() => {
-      this.#translationDebounceTimer = null;
-      this.#executePartialTranslation(this.#currentPartialText, onSegment, onError);
-    }, TRANSLATION_DEBOUNCE_MS);
+    this.#debounceTimer = setTimeout(() => {
+      this.#debounceTimer = null;
+      this.#executeTranslation(this.#currentPartialText, onSegment, onError);
+    }, decision.debounceMs);
   }
 
-  async #executePartialTranslation(
+  /** 执行翻译 + 弹幕推送 */
+  async #executeTranslation(
     text: string,
     onSegment: PipelineCallback,
     onError: ErrorCallback,
@@ -175,11 +192,52 @@ export class AudioPipeline {
     if (!text || text === this.#lastTranslatedText || this.#isTranslating) return;
 
     this.#isTranslating = true;
+    const segmentId = `seg_${String(++this.#segmentCounter).padStart(3, "0")}`;
+
+    // 弹幕推入（draft 状态，先用英文占位）
+    const snapshot: DanmakuEntrySnapshot = {
+      id: segmentId,
+      english: text,
+      chinese: "",
+      status: "draft",
+      confidence: PARTIAL_TRANSLATION_CONFIDENCE,
+    };
+    this.#output?.sendDanmakuPush(snapshot);
+
+    // 弹幕池管理
+    this.#danmakuCount++;
+    if (this.#danmakuCount > MAX_DANMAKU_ENTRIES) {
+      const evictId = `seg_${String(this.#segmentCounter - MAX_DANMAKU_ENTRIES).padStart(3, "0")}`;
+      this.#output?.sendDanmakuEvict(evictId);
+    }
+
     try {
-      const segment = await this.#translateWithTimeout(text);
+      // 流式翻译（逐步更新弹幕中文）
+      const accumulatedChinese = await this.#translateWithStreamingUpdate(
+        text,
+        segmentId,
+      );
+
+      // 归一化翻译输出
+      const normalizedChinese = this.normalizer.normalizeTranslationOutput(accumulatedChinese);
+
+      // 弹幕最终更新
+      this.#output?.sendDanmakuUpdate(segmentId, normalizedChinese, true);
+
+      // 完整 segment 输出（用于历史记录、修正等）
+      const segment = await this.#processFinalResult({
+        text,
+        isFinal: false,
+        confidence: PARTIAL_TRANSLATION_CONFIDENCE,
+        startTime: 0,
+        endTime: 0,
+      });
       if (segment) {
         this.#lastTranslatedText = text;
-        onSegment(segment);
+        onSegment({
+          ...segment,
+          chinese: normalizedChinese,
+        });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -189,25 +247,80 @@ export class AudioPipeline {
     }
   }
 
-  /** 带超时保护的翻译调用 */
-  async #translateWithTimeout(text: string): Promise<PipelineSegment> {
-    const timeout = new Promise<never>((_, reject) => {
-      setTimeout(
-        () => reject(new TranslationError(`Translation timed out after ${TRANSLATION_TIMEOUT_MS}ms`)),
-        TRANSLATION_TIMEOUT_MS,
-      );
-    });
+  /**
+   * 翻译并逐 token 更新弹幕中文（模拟流式效果）。
+   * 当前 Zhipu API 使用非流式请求，通过分词模拟逐步更新。
+   */
+  async #translateWithStreamingUpdate(
+    text: string,
+    segmentId: string,
+  ): Promise<string> {
+    const context = this.#session ? this.#session.getContext(5) : [];
 
-    return Promise.race([
-      this.#processFinalResult({
-        text,
-        isFinal: false,
-        confidence: PARTIAL_TRANSLATION_CONFIDENCE,
-        startTime: 0,
-        endTime: 0,
+    this.#output?.sendStatus("translating");
+    const result = await Promise.race([
+      this.translationService.translateWithContext({ text, context }),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new TranslationError(`Translation timed out after ${TRANSLATION_TIMEOUT_MS}ms`)),
+          TRANSLATION_TIMEOUT_MS,
+        );
       }),
-      timeout,
     ]);
+
+    const chinese = result.translation;
+    // 模拟流式：按 UTF-16 字符逐步推送更新
+    const chars = [...chinese];
+    const steps = Math.min(chars.length, 8);
+    const chunkSize = Math.max(1, Math.floor(chars.length / steps));
+
+    for (let i = chunkSize; i <= chars.length; i += chunkSize) {
+      const partial = chars.slice(0, i).join("");
+      this.#output?.sendDanmakuUpdate(segmentId, partial, i >= chars.length);
+      await new Promise((r) => setTimeout(r, 40));
+    }
+
+    return chinese;
+  }
+
+  /** 计算实时语速指标 */
+  #computeSpeechMetrics(text: string): SpeechMetrics {
+    const now = Date.now();
+    this.#recordSpeechSample(text.length);
+
+    // 最近 N 次的平均语速
+    const recent = this.#speechRateSamples.slice(-SPEECH_RATE_WINDOW);
+    let charsPerSecond = 0;
+    if (recent.length >= 2) {
+      const first = recent[0]!;
+      const last = recent[recent.length - 1]!;
+      const durationMs = last.time - first.time;
+      const totalChars = last.length - first.length;
+      if (durationMs > 0) {
+        charsPerSecond = (totalChars / durationMs) * 1000;
+      }
+    }
+
+    const msSinceLastPartial =
+      recent.length >= 2
+        ? now - recent[recent.length - 2]!.time
+        : 500;
+
+    const punctuationEnds = /[.!?。！？\n]$/.test(text);
+
+    return {
+      charsPerSecond: Math.max(0, Math.min(charsPerSecond, 50)),
+      msSinceLastPartial,
+      punctuationEnds,
+      segmentCount: this.#danmakuCount,
+    };
+  }
+
+  #recordSpeechSample(currentLength: number): void {
+    this.#speechRateSamples.push({ time: Date.now(), length: currentLength });
+    if (this.#speechRateSamples.length > 50) {
+      this.#speechRateSamples.shift();
+    }
   }
 
   pushAudio(chunk: ArrayBuffer): void {
@@ -216,25 +329,24 @@ export class AudioPipeline {
 
   async stop(): Promise<void> {
     this.#session = null;
-    // 清理翻译防抖定时器与状态
-    if (this.#translationDebounceTimer) {
-      clearTimeout(this.#translationDebounceTimer);
-      this.#translationDebounceTimer = null;
+    if (this.#debounceTimer) {
+      clearTimeout(this.#debounceTimer);
+      this.#debounceTimer = null;
     }
     this.#lastTranslatedText = "";
     this.#currentPartialText = "";
+    this.#danmakuCount = 0;
+    this.#speechRateSamples = [];
     await this.asrService.stopRecognition();
   }
 
   async #processFinalResult(result: ASRResult): Promise<PipelineSegment> {
     const segmentId = `seg_${String(++this.#segmentCounter).padStart(3, "0")}`;
 
-    // 从 Session 获取上下文（最近 5 句）
     const context = this.#session
       ? this.#session.getContext(5)
       : [];
 
-    // 传原始文本和上下文给翻译服务，prompt 构建由翻译服务负责
     this.#output?.sendStatus("translating");
     const translationResult = await this.translationService.translateWithContext({
       text: result.text,
