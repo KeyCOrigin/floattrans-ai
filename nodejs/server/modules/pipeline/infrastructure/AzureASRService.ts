@@ -78,4 +78,5 @@ export class AzureASRService implements IASRService {
   onFinalResult(cb: ASRFinalCallback): void { this.#onFinal = cb; }
   onPartialResult(cb: ASRPartialCallback): void { this.#onPartial = cb; }
   onError(cb: ASRErrorCallback): void { this.#onError = cb; }
+  onReady(_cb: () => void): void {}
 }

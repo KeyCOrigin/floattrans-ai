@@ -24,4 +24,6 @@ export interface IASRService {
   onFinalResult(cb: ASRFinalCallback): void;
   onPartialResult(cb: ASRPartialCallback): void;
   onError(cb: ASRErrorCallback): void;
+  /** ASR 连接就绪回调（WebSocket onopen / SDK session started） */
+  onReady(cb: () => void): void;
 }

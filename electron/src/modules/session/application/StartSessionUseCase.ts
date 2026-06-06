@@ -13,6 +13,18 @@ export type StartSessionResult =
   | { ok: true; data: FrontendSession }
   | { ok: false; error: ConnectionError };
 
+export type PipelineStatusEvent =
+  | { type: "status"; status: string; detail?: string }
+  | { type: "error"; code: string; message: string };
+
+interface WsMessage {
+  type: string;
+  status?: string;
+  detail?: string;
+  code?: string;
+  message?: string;
+}
+
 const LIVE_AUDIO_FORMAT: SessionAudioFormat = {
   sampleRate: 16000,
   bitDepth: 16,
@@ -28,7 +40,8 @@ export class StartSessionUseCase {
   async execute(
     mode: InputMode,
     wsEndpoint: string,
-    deviceId?: string,
+    deviceId: string | undefined,
+    onPipelineEvent?: (event: PipelineStatusEvent) => void,
   ): Promise<StartSessionResult> {
     const session = FrontendSession.create(mode === "demo" ? "demo" : "live", wsEndpoint);
 
@@ -44,6 +57,18 @@ export class StartSessionUseCase {
 
       session.setConnecting();
       await this.wsClient.connect(wsEndpoint);
+
+      // 注册消息监听，将后端状态事件转发给调用方
+      this.wsClient.onMessage((data: unknown) => {
+        const msg = data as WsMessage;
+        if (!msg || typeof msg.type !== "string") return;
+        if (msg.type === "pipeline:status" && onPipelineEvent) {
+          onPipelineEvent({ type: "status", status: msg.status ?? "unknown", detail: msg.detail });
+        } else if (msg.type === "session:error" && onPipelineEvent) {
+          onPipelineEvent({ type: "error", code: msg.code ?? "UNKNOWN", message: msg.message ?? "" });
+        }
+      });
+
       this.wsClient.startSession(LIVE_AUDIO_FORMAT);
       session.setListening();
 

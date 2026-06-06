@@ -8,11 +8,22 @@ import type { CorrectionSuggestion } from "../domain/CorrectionSuggestion.value-
 import type { CorrectionPrompt } from "../domain/ContextCorrectionEngine.service";
 import type { TranslationProviderConfig } from "../domain/TranslationProviderConfig.value-object";
 import type { ContextEntry } from "../domain/ContextEntry.value-object";
+import { TranslationError } from "../../../../../shared/errors/AppError";
 
-interface OpenAIResponse {
-  choices: Array<{
-    message: { content: string };
+interface TranslationResponse {
+  translation: string;
+  corrections?: Array<{
+    targetIndex: number;
+    oldEnglish: string;
+    newEnglish: string;
+    oldChinese: string;
+    newChinese: string;
+    reason: string;
   }>;
+}
+
+function isTranslationResponse(obj: unknown): obj is TranslationResponse {
+  return typeof obj === "object" && obj !== null && typeof (obj as Record<string, unknown>).translation === "string";
 }
 
 export class OpenAICompatibleTranslationService implements ITranslationService {
@@ -24,54 +35,46 @@ export class OpenAICompatibleTranslationService implements ITranslationService {
   async translateWithContext(req: TranslationRequest): Promise<TranslationResult> {
     const prompt = this.buildPrompt(req.text, req.context);
 
-    // 实际部署时取消注释：
-    //
-    // const response = await fetch(this.provider.baseUrl, {
-    //   method: "POST",
-    //   headers: {
-    //     "Content-Type": "application/json",
-    //     "Authorization": `Bearer ${this.provider.apiKey}`,
-    //   },
-    //   body: JSON.stringify({
-    //     model: this.provider.model,
-    //     messages: [
-    //       { role: "system", content: prompt.systemPrompt },
-    //       { role: "user", content: prompt.userPrompt },
-    //     ],
-    //     temperature: 0.3,
-    //     response_format: { type: "json_object" },
-    //   }),
-    // });
-    //
-    // if (!response.ok) {
-    //   const body = await response.text().catch(() => "");
-    //   throw new TranslationError(`${this.provider.model} API error: ${response.status} — ${body.slice(0, 200)}`);
-    // }
-    //
-    // const data: OpenAIResponse = await response.json();
-    // const content = data.choices[0]?.message?.content ?? "{}";
-    // return this.#parseResponse(content, req.text);
+    const response = await fetch(this.provider.baseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.provider.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.provider.model,
+        messages: [
+          { role: "system", content: prompt.systemPrompt },
+          { role: "user", content: prompt.userPrompt },
+        ],
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+      }),
+    });
 
-    return {
-      translation: `${req.text} (翻译占位 — ${this.provider.model})`,
-      corrections: [],
-      originalText: req.text,
-    };
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new TranslationError(
+        `${this.provider.model} API error: ${response.status} — ${body.slice(0, 200)}`
+      );
+    }
+
+    const data: unknown = await response.json();
+    const content = typeof data === "object" && data !== null &&
+      "choices" in data &&
+      Array.isArray((data as Record<string, unknown>).choices)
+      ? ((data as Record<string, unknown>).choices as Array<{ message?: { content?: string } }>)[0]?.message?.content ?? "{}"
+      : "{}";
+
+    return this.#parseResponse(content, req.text);
   }
 
   #parseResponse(content: string, originalText: string): TranslationResult {
     try {
-      const parsed = JSON.parse(content) as {
-        translation: string;
-        corrections?: Array<{
-          targetIndex: number;
-          oldEnglish: string;
-          newEnglish: string;
-          oldChinese: string;
-          newChinese: string;
-          reason: string;
-        }>;
-      };
+      const parsed: unknown = JSON.parse(content);
+      if (!isTranslationResponse(parsed)) {
+        return { translation: originalText, corrections: [], originalText };
+      }
 
       const corrections: CorrectionSuggestion[] = (parsed.corrections ?? []).map((c) => ({
         targetSegmentId: `seg_${String(c.targetIndex).padStart(3, "0")}`,

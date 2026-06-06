@@ -50,6 +50,7 @@ export function ControlPanel() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
   const [permissionStatus, setPermissionStatus] = useState<string>("");
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [pipelineStatus, setPipelineStatus] = useState<string>("");
 
   // 初始化引擎
   useEffect(() => {
@@ -140,11 +141,23 @@ export function ControlPanel() {
 
   const handleStartListening = async () => {
     setLiveError(null);
+    setPipelineStatus("");
     if (!selectedDeviceId) {
       handleRefreshDevices();
       return;
     }
-    const result = await deps.startSessionUseCase.execute(inputMode, "ws://localhost:3001", selectedDeviceId);
+    const result = await deps.startSessionUseCase.execute(
+      inputMode,
+      "ws://localhost:3001",
+      selectedDeviceId,
+      (event) => {
+        if (event.type === "status") {
+          setPipelineStatus(event.detail ? `${event.status}: ${event.detail}` : event.status);
+        } else {
+          setLiveError(`[${event.code}] ${event.message}`);
+        }
+      },
+    );
     if (result.ok) {
       liveSessionRef.current = result.data;
       setIsPlaying(true);
@@ -228,6 +241,7 @@ export function ControlPanel() {
               <button className="btn btn-play" onClick={handleStartListening} disabled={isPlaying || !selectedDeviceId}>🎤 开始监听</button>
               <button className="btn btn-stop" onClick={handleStopListening} disabled={!isPlaying}>⏹ 停止监听</button>
             </div>
+            {pipelineStatus && <p className="pipeline-status">{pipelineStatus}</p>}
             {liveError && <p className="live-error">{liveError}</p>}
           </>
         )}

@@ -53,6 +53,10 @@ export class BrowserAudioCapture implements IAudioCaptureService {
       this.#mediaStream = await this.#acquireStream(deviceId, config.channels);
       this.#permissionGranted = true;
       this.#audioContext = new AudioContext({ sampleRate: config.sampleRate });
+      // Chromium 可能在非用户手势上下文将 AudioContext 设为 suspended
+      if (this.#audioContext.state === "suspended") {
+        await this.#audioContext.resume();
+      }
       this.#buildAudioGraph(config);
       this.#isActive = true;
     } catch (err) {
