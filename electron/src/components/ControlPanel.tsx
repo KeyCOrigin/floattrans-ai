@@ -10,7 +10,7 @@ import {
 } from "../types/subtitle";
 import { composeFrontend } from "../compose";
 import type { FrontendSession } from "../modules/session/domain/Session.entity";
-import type { InputMode } from "../modules/session/application/StartSessionUseCase";
+import type { InputMode, SubtitleEvent } from "../modules/session/application/StartSessionUseCase";
 import type { AudioDevice } from "../modules/audio/domain/AudioDevice.value-object";
 import "../styles/control.css";
 
@@ -86,6 +86,9 @@ export function ControlPanel() {
   const emitSubtitleRef = useRef(emitSubtitle);
   emitSubtitleRef.current = emitSubtitle;
 
+  /** 保留最近一次 final 的中文翻译，避免 partial 覆盖导致闪烁 */
+  const lastChineseRef = useRef<string>("");
+
   // === Demo 模式 ===
 
   const handleStart = () => {
@@ -157,6 +160,24 @@ export function ControlPanel() {
           setLiveError(`[${event.code}] ${event.message}`);
         }
       },
+      (subtitle: SubtitleEvent) => {
+        // partial 不含中文：保留上一次 final 的中文翻译，避免闪烁
+        const chineseText = subtitle.isFinal ? subtitle.chinese : lastChineseRef.current;
+        if (subtitle.isFinal && subtitle.chinese) {
+          lastChineseRef.current = subtitle.chinese;
+        }
+        const seg: SubtitleSegment = {
+          id: subtitle.segmentId ?? `live_${Date.now()}`,
+          start: subtitle.startTime ?? 0,
+          end: subtitle.endTime ?? 0,
+          english: subtitle.english,
+          chinese: chineseText,
+          status: subtitle.isFinal ? "final" : "active",
+          confidence: subtitle.confidence,
+        };
+        setCurrentSubtitle(seg);
+        emitSubtitleRef.current(seg);
+      },
     );
     if (result.ok) {
       liveSessionRef.current = result.data;
@@ -174,7 +195,8 @@ export function ControlPanel() {
     setIsPlaying(false);
     setCurrentSubtitle(null);
     setLiveError(null);
-    emitSubtitle(null);
+    lastChineseRef.current = "";
+    emitSubtitleRef.current(null);
   };
 
   const handleModeSwitch = (newMode: AppMode) => {

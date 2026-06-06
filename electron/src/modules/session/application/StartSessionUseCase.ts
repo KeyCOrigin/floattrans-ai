@@ -17,12 +17,34 @@ export type PipelineStatusEvent =
   | { type: "status"; status: string; detail?: string }
   | { type: "error"; code: string; message: string };
 
+/** 实时字幕事件：由后端 subtitle:partial / subtitle:final 消息驱动 */
+export interface SubtitleEvent {
+  readonly english: string;
+  readonly chinese: string;
+  readonly isFinal: boolean;
+  readonly confidence: number;
+  readonly segmentId?: string;
+  readonly startTime?: number;
+  readonly endTime?: number;
+}
+
 interface WsMessage {
   type: string;
+  // pipeline:status
   status?: string;
   detail?: string;
+  // session:error
   code?: string;
   message?: string;
+  // subtitle:partial
+  english?: string;
+  timestamp?: number;
+  // subtitle:final
+  chinese?: string;
+  confidence?: number;
+  segmentId?: string;
+  startTime?: number;
+  endTime?: number;
 }
 
 const LIVE_AUDIO_FORMAT: SessionAudioFormat = {
@@ -32,6 +54,9 @@ const LIVE_AUDIO_FORMAT: SessionAudioFormat = {
 };
 
 export class StartSessionUseCase {
+  /** onMessage 取消订阅句柄，用于 stop() 时清理避免回调泄漏 */
+  #messageUnsubscribe: (() => void) | null = null;
+
   constructor(
     private readonly wsClient: IWebSocketClient,
     private readonly audioCapture: IAudioCaptureService,
@@ -42,6 +67,7 @@ export class StartSessionUseCase {
     wsEndpoint: string,
     deviceId: string | undefined,
     onPipelineEvent?: (event: PipelineStatusEvent) => void,
+    onSubtitle?: (event: SubtitleEvent) => void,
   ): Promise<StartSessionResult> {
     const session = FrontendSession.create(mode === "demo" ? "demo" : "live", wsEndpoint);
 
@@ -58,14 +84,33 @@ export class StartSessionUseCase {
       session.setConnecting();
       await this.wsClient.connect(wsEndpoint);
 
-      // 注册消息监听，将后端状态事件转发给调用方
-      this.wsClient.onMessage((data: unknown) => {
+      // 先清理旧订阅，再注册新监听
+      this.#messageUnsubscribe?.();
+      // 注册消息监听，将后端状态事件与字幕事件转发给调用方
+      this.#messageUnsubscribe = this.wsClient.onMessage((data: unknown) => {
         const msg = data as WsMessage;
         if (!msg || typeof msg.type !== "string") return;
         if (msg.type === "pipeline:status" && onPipelineEvent) {
           onPipelineEvent({ type: "status", status: msg.status ?? "unknown", detail: msg.detail });
         } else if (msg.type === "session:error" && onPipelineEvent) {
           onPipelineEvent({ type: "error", code: msg.code ?? "UNKNOWN", message: msg.message ?? "" });
+        } else if (msg.type === "subtitle:partial" && onSubtitle) {
+          onSubtitle({
+            english: msg.english ?? "",
+            chinese: "",
+            isFinal: false,
+            confidence: 0.8,
+          });
+        } else if (msg.type === "subtitle:final" && onSubtitle) {
+          onSubtitle({
+            english: msg.english ?? "",
+            chinese: msg.chinese ?? "",
+            isFinal: true,
+            confidence: msg.confidence ?? 0.9,
+            segmentId: msg.segmentId,
+            startTime: msg.startTime,
+            endTime: msg.endTime,
+          });
         }
       });
 
@@ -79,7 +124,9 @@ export class StartSessionUseCase {
 
       return { ok: true, data: session };
     } catch (err) {
-      // 清理已建立的连接，回滚 session 状态
+      // 清理已建立的连接与订阅，回滚 session 状态
+      this.#messageUnsubscribe?.();
+      this.#messageUnsubscribe = null;
       try { this.audioCapture.stop(); } catch { /* 可能尚未启动 */ }
       try { this.wsClient.disconnect(); } catch { /* 静默清理 */ }
       session.setStopped();
@@ -96,5 +143,8 @@ export class StartSessionUseCase {
       this.wsClient.disconnect();
       session.setStopped();
     }
+    // 清理消息监听，防止回调泄漏
+    this.#messageUnsubscribe?.();
+    this.#messageUnsubscribe = null;
   }
 }
