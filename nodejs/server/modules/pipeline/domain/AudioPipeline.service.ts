@@ -7,6 +7,7 @@ import type { IASRService } from "./IASRService.port";
 import type { ITranslationService } from "./ITranslationService.port";
 import type { ASRResult } from "./ASRResult.value-object";
 import type { Session } from "../../session/domain/Session.entity";
+import type { PipelineOutputPort } from "./PipelineOutputPort.port";
 import { TranslationError } from "../../../../../shared/errors/AppError";
 
 export type PipelineCallback = (segment: {
@@ -50,15 +51,21 @@ export type PipelineSegment = {
 export class AudioPipeline {
   #segmentCounter = 0;
   #session: Session | null = null;
+  #output: PipelineOutputPort | null = null;
 
   constructor(
     private readonly asrService: IASRService,
     private readonly translationService: ITranslationService,
   ) {}
 
-  async start(session: Session): Promise<void> {
+  async start(session: Session, output: PipelineOutputPort): Promise<void> {
     this.#session = session;
+    this.#output = output;
     this.#segmentCounter = 0;
+    output.sendStatus("asr_connecting");
+    this.asrService.onReady(() => {
+      output.sendStatus("asr_connected");
+    });
     await this.asrService.startRecognition({
       language: "en-US",
       sampleRate: session.audioFormat.sampleRate,
@@ -86,7 +93,10 @@ export class AudioPipeline {
       }
     });
 
-    this.asrService.onError(onError);
+    this.asrService.onError((err) => {
+      this.#output?.sendStatus("asr_error", err.message);
+      onError(err);
+    });
   }
 
   pushAudio(chunk: ArrayBuffer): void {
@@ -107,6 +117,7 @@ export class AudioPipeline {
       : [];
 
     // 传原始文本和上下文给翻译服务，prompt 构建由翻译服务负责
+    this.#output?.sendStatus("translating");
     const translationResult = await this.translationService.translateWithContext({
       text: result.text,
       context,

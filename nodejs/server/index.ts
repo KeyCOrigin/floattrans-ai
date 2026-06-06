@@ -7,10 +7,15 @@ import { config } from "./config";
 import { compose } from "./compose";
 import { createWSHandler } from "./presentation/wsHandler";
 
+process.stderr.write(`[FloatTrans Server] starting...\n`);
+
 const port = config.server.port;
 const wss = new WebSocketServer({ port });
 
+process.stderr.write(`[FloatTrans Server] composing dependencies...\n`);
 const deps = compose();
+process.stderr.write(`[FloatTrans Server] ASR provider: ${config.asr.provider}\n`);
+process.stderr.write(`[FloatTrans Server] Translation provider: ${config.translation.model}\n`);
 
 wss.on("connection", (ws) => {
   const handler = createWSHandler(ws, {

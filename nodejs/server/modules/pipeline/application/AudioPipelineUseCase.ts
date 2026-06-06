@@ -14,7 +14,7 @@ export class AudioPipelineUseCase {
   ) {}
 
   async execute(session: Session): Promise<void> {
-    await this.pipeline.start(session);
+    await this.pipeline.start(session, this.output);
 
     this.pipeline.setCallbacks(
       (segment) => {
