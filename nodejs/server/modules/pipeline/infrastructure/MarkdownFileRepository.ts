@@ -1,13 +1,17 @@
-// MarkdownFileRepository.ts — 转录文档持久化（.md 文件）
+// MarkdownFileRepository.ts — 转录文档持久化（.md 文件）（Phase 1）
 // 实现 ITranscriptRepository，写入 nodejs/server/sessions/ 目录
 //
-// v2 改进：异步串行化写入，避免并发 NMT 完成时同时写文件导致竞态
+// Phase 1 变化：
+//   - TranscriptDocument → LiveDocument
+//   - save() 调用 doc.toMarkdown()
+//   - load() 解析 .md 生成新 LiveLine（新 UUID），不保留原始 lineId
+//   - 异步串行化写入，避免并发 NMT 完成时同时写文件导致竞态
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ITranscriptRepository } from "../domain/ITranscriptRepository.port";
-import { TranscriptDocument } from "../domain/TranscriptDocument.entity";
+import { LiveDocument } from "../domain/LiveDocument.entity";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,7 +26,7 @@ export class MarkdownFileRepository implements ITranscriptRepository {
   /** 写入串行化 Promise 链，保证同文件不会并发写入 */
   #writeChain = Promise.resolve();
 
-  save(doc: TranscriptDocument): void {
+  save(doc: LiveDocument): void {
     const filePath = this.getFilePath(doc.id);
     const markdown = doc.toMarkdown();
 
@@ -35,16 +39,18 @@ export class MarkdownFileRepository implements ITranscriptRepository {
     });
   }
 
-  load(sessionId: string): TranscriptDocument | null {
+  load(sessionId: string): LiveDocument | null {
     const filePath = this.getFilePath(sessionId);
     if (!fs.existsSync(filePath)) return null;
-    // 从文件重建文档（仅用于恢复会话，不用于实时管道）
-    const doc = TranscriptDocument.create(sessionId);
+
+    const doc = LiveDocument.create(sessionId);
     const content = fs.readFileSync(filePath, "utf-8");
     const lines = content.split("\n");
-    const LINE_RE = /^\[(\d+)\]\s+(EN|ZH):\s+(.+)$/;
 
-    const map = new Map<number, { english: string; chinese: string | null }>();
+    // 兼容两种格式：[N] 和 **[N]**
+    const LINE_RE = /^\*{0,2}\[(\d+)\]\s+(EN|ZH):\*{0,2}\s*(.+)$/;
+
+    const map = new Map<number, { english: string; chinese: string | null; status: string }>();
     for (const raw of lines) {
       const trimmed = raw.trim();
       if (!trimmed) continue;
@@ -52,20 +58,41 @@ export class MarkdownFileRepository implements ITranscriptRepository {
       if (!match) continue;
       const ln = parseInt(match[1]!, 10);
       const lang = match[2]!;
-      const text = match[3]!;
+      const text = match[3]!
+        .replace(/\[已修复\]\s*$/, "")  // 剥离 [已修复] 标记
+        .trim();
 
       let entry = map.get(ln);
-      if (!entry) { entry = { english: "", chinese: null }; map.set(ln, entry); }
-      if (lang === "EN") entry.english = text;
-      else entry.chinese = text;
-    }
-
-    for (const [ln, entry] of [...map.entries()].sort(([a], [b]) => a - b)) {
-      doc.appendFinalEnglish(entry.english);
-      if (entry.chinese && entry.chinese !== "(翻译中...)") {
-        doc.setChinese(ln, entry.chinese);
+      if (!entry) { entry = { english: "", chinese: null, status: "pending" }; map.set(ln, entry); }
+      if (lang === "EN") {
+        entry.english = text;
+      } else {
+        // 检测 LLM 修正标记
+        if (match[3]!.includes("[已修复]")) {
+          entry.status = "corrected";
+        }
+        entry.chinese = text !== "*(翻译中...)*" ? text : null;
+        if (entry.chinese !== null && entry.status === "pending") {
+          entry.status = "translated";
+        }
       }
     }
+
+    // 按行号顺序重建
+    for (const [, entry] of [...map.entries()].sort(([a], [b]) => a - b)) {
+      const result = doc.appendOrRefine(entry.english);
+      if (result && entry.chinese) {
+        doc.applyNmtResult(result.lineId, entry.chinese, result.sourceVersion);
+      }
+      // 如果原是 corrected，重新标记（简化处理）
+      if (result && entry.status === "corrected") {
+        const line = doc.getLine(result.lineId);
+        if (line && line.chinese === entry.chinese) {
+          line.applyRefinement(entry.chinese!);
+        }
+      }
+    }
+
     return doc;
   }
 
