@@ -1,12 +1,11 @@
-// wsHandler.ts — WebSocket 事件路由
-// 表现层：解析消息 → 调用应用层 UseCase → 返回响应
+// wsHandler.ts — WebSocket 事件路由（v5: Markdown 文档流）
 
 import type { WebSocket } from "ws";
 import type { InMemorySessionRepository } from "../modules/session/infrastructure/InMemorySessionRepository";
 import { Session } from "../modules/session/domain/Session.entity";
 import type { AudioFormat } from "../modules/session/domain/AudioFormat.value-object";
 import { AudioPipelineUseCase } from "../modules/pipeline/application/AudioPipelineUseCase";
-import type { PipelineOutputPort, PipelineStatus, DanmakuEntrySnapshot } from "../modules/pipeline/domain/PipelineOutputPort.port";
+import type { PipelineOutputPort, PipelineStatus } from "../modules/pipeline/domain/PipelineOutputPort.port";
 import type { AudioPipeline } from "../modules/pipeline/domain/AudioPipeline.service";
 
 interface RawMessage {
@@ -20,7 +19,7 @@ export interface WSHandlerDeps {
   readonly sessionRepo: InMemorySessionRepository;
 }
 
-const WS_OPEN = 1; // WebSocket.OPEN
+const WS_OPEN = 1;
 
 function log(msg: string): void {
   process.stderr.write(`[wsHandler] ${msg}\n`);
@@ -28,11 +27,11 @@ function log(msg: string): void {
 
 function createOutputAdapter(ws: WebSocket): PipelineOutputPort {
   return {
-    sendSegment(segment): void {
-      ws.send(JSON.stringify({ type: "subtitle:final" as const, ...segment }));
+    sendContent(markdown: string, version: number): void {
+      ws.send(JSON.stringify({ type: "document:content" as const, markdown, version }));
     },
-    sendPartial(text, timestamp): void {
-      ws.send(JSON.stringify({ type: "subtitle:partial" as const, english: text, timestamp }));
+    sendPartial(english: string): void {
+      ws.send(JSON.stringify({ type: "document:partial" as const, english }));
     },
     sendStatus(status: PipelineStatus, detail?: string): void {
       ws.send(JSON.stringify({ type: "pipeline:status" as const, status, detail }));
@@ -42,18 +41,6 @@ function createOutputAdapter(ws: WebSocket): PipelineOutputPort {
     },
     isAvailable(): boolean {
       return ws.readyState === WS_OPEN;
-    },
-    sendDanmakuPush(entry: DanmakuEntrySnapshot): void {
-      ws.send(JSON.stringify({ type: "danmaku:push" as const, ...entry }));
-    },
-    sendDanmakuUpdate(id: string, chinese: string, isComplete: boolean): void {
-      ws.send(JSON.stringify({ type: "danmaku:update" as const, id, chinese, isComplete }));
-    },
-    sendDanmakuCorrect(id: string, oldChinese: string, newChinese: string): void {
-      ws.send(JSON.stringify({ type: "danmaku:correct" as const, id, oldChinese, newChinese }));
-    },
-    sendDanmakuEvict(id: string): void {
-      ws.send(JSON.stringify({ type: "danmaku:evict" as const, id }));
     },
   };
 }
@@ -103,9 +90,7 @@ export function createWSHandler(ws: WebSocket, deps: WSHandlerDeps) {
 
             audioFrameCount = 0;
             const format: AudioFormat = msg.audioFormat ?? {
-              sampleRate: 16000,
-              bitDepth: 16,
-              channels: 1,
+              sampleRate: 16000, bitDepth: 16, channels: 1,
             };
             currentSession = Session.create(format);
             currentSession.start();

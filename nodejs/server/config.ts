@@ -2,7 +2,12 @@
 // 整个系统中只有这个文件直接访问 process.env
 
 import { ValidationError } from "../../shared/errors/AppError";
-import type { TranslationProviderConfig } from "./modules/pipeline/domain/TranslationProviderConfig.value-object";
+
+export interface TranslationProviderConfig {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly model: string;
+}
 
 // ===== ASR 供应商 =====
 

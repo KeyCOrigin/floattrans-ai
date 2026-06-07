@@ -1,111 +1,62 @@
-// LLMCorrectionService.ts — LLM 上下文修正服务
-// 实现 ICorrectionService，使用 ContextCorrectionEngine 构建 prompt，
-// 调用 OpenAI 兼容 API 获取修正建议
-// 职责：异步回顾历史译文，基于后续语义修正误译（fire-and-forget，延迟 < 3s）
+// LLMCorrectionService.ts — LLM 全文修正服务（v4）
+// 实现 ICorrectionService，通读完整对话文档后做全量修正
+// 不再使用逐句 CorrectionRequest，改为 reviewFullDocument(markdown: string)
 
 import type { ICorrectionService } from "../domain/ICorrectionService.port";
-import type { CorrectionRequest } from "../domain/CorrectionRequest.value-object";
-import type { CorrectionSuggestion } from "../domain/CorrectionSuggestion.value-object";
-import type { CorrectionPrompt } from "../domain/ContextCorrectionEngine.service";
-import type { TranslationProviderConfig } from "../domain/TranslationProviderConfig.value-object";
-import type { ContextEntry } from "../domain/ContextEntry.value-object";
 import { TranslationError } from "../../../../../shared/errors/AppError";
 
-interface CorrectionResponse {
-  corrections: Array<{
-    targetIndex: number;
-    oldEnglish: string;
-    newEnglish: string;
-    oldChinese: string;
-    newChinese: string;
-    reason: string;
-  }>;
-}
+const SYSTEM_PROMPT = `你是一个专业同声传译校对员。以下是实时转写和翻译的对话记录。
+每段格式：
+[行号] EN: 英文原文
+[行号] ZH: 中文译文
 
-function isCorrectionResponse(obj: unknown): obj is CorrectionResponse {
-  return (
-    typeof obj === "object" &&
-    obj !== null &&
-    "corrections" in obj &&
-    Array.isArray((obj as Record<string, unknown>).corrections)
-  );
+请检查并修正中文翻译的：
+1. 语义准确性（是否忠实原文）
+2. 上下文连贯性（前后句是否逻辑一致）
+3. 术语一致性（同一概念是否使用相同的译法）
+
+直接返回修正后的完整文档（保持相同格式，只修改需要修正的中文行）。
+不要添加任何解释性文字。如果所有翻译都正确，直接返回原文。`;
+
+interface CorrectionConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
 }
 
 export class LLMCorrectionService implements ICorrectionService {
-  constructor(
-    private readonly provider: TranslationProviderConfig,
-    private readonly buildCorrectionPrompt: (
-      currentText: string,
-      currentTranslation: string,
-      currentSegmentId: string,
-      history: readonly ContextEntry[],
-    ) => CorrectionPrompt,
-  ) {}
+  constructor(private readonly config: CorrectionConfig) {}
 
-  async review(req: CorrectionRequest): Promise<readonly CorrectionSuggestion[]> {
-    const prompt = this.buildCorrectionPrompt(
-      req.currentText,
-      req.currentTranslation,
-      req.currentSegmentId,
-      req.history,
-    );
-
-    const response = await fetch(this.provider.baseUrl, {
+  async reviewFullDocument(markdown: string): Promise<string> {
+    const response = await fetch(this.config.baseUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${this.provider.apiKey}`,
+        Authorization: `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify({
-        model: this.provider.model,
+        model: this.config.model,
         messages: [
-          { role: "system", content: prompt.systemPrompt },
-          { role: "user", content: prompt.userPrompt },
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: markdown },
         ],
         temperature: 0.3,
-        response_format: { type: "json_object" },
       }),
     });
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       throw new TranslationError(
-        `Correction API error: ${response.status} — ${body.slice(0, 200)}`,
+        `LLM Correction API error: ${response.status} — ${body.slice(0, 200)}`,
       );
     }
 
-    const data: unknown = await response.json();
-    const obj = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : null;
+    const data = (await response.json()) as Record<string, unknown>;
     const content =
-      obj !== null && "choices" in obj && Array.isArray(obj.choices)
-        ? (obj.choices as Array<{ message?: { content?: string } }>)[0]?.message?.content ?? "{}"
-        : "{}";
+      data?.choices != null && Array.isArray(data.choices) && data.choices.length > 0
+        ? (data.choices as Array<{ message?: { content?: string } }>)[0]?.message?.content ?? markdown
+        : markdown;
 
-    return this.#parseCorrections(content, req.currentSegmentId);
-  }
-
-  #parseCorrections(content: string, currentSegmentId?: string): readonly CorrectionSuggestion[] {
-    try {
-      const parsed: unknown = JSON.parse(content);
-      if (!isCorrectionResponse(parsed)) return [];
-
-      return parsed.corrections.map((c) => {
-        // targetIndex === -1 表示修正当前句，使用 currentSegmentId
-        const targetSegmentId =
-          c.targetIndex === -1 && currentSegmentId
-            ? currentSegmentId
-            : `seg_${String(c.targetIndex).padStart(3, "0")}`;
-        return {
-          targetSegmentId,
-          oldEnglish: c.oldEnglish,
-          newEnglish: c.newEnglish,
-          oldChinese: c.oldChinese,
-          newChinese: c.newChinese,
-          reason: c.reason,
-        };
-      });
-    } catch {
-      return [];
-    }
+    return String(content).trim();
   }
 }

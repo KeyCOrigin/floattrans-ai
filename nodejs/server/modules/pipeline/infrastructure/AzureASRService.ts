@@ -34,7 +34,15 @@ export class AzureASRService implements IASRService {
     //
     // recognizer.recognizing = (_s, e) => {
     //   if (e.result.text && this.#onPartial) {
-    //     this.#onPartial(e.result.text);
+    //     // ASRPartialCallback 现要求 ASRResult（含逐词元数据），
+    //     // Azure 不提供词级元数据，故 words=undefined。
+    //     this.#onPartial({
+    //       text: e.result.text,
+    //       isFinal: false,
+    //       confidence: 0.5,
+    //       startTime: 0,
+    //       endTime: 0,
+    //     });
     //   }
     // };
     //
@@ -78,5 +86,12 @@ export class AzureASRService implements IASRService {
   onFinalResult(cb: ASRFinalCallback): void { this.#onFinal = cb; }
   onPartialResult(cb: ASRPartialCallback): void { this.#onPartial = cb; }
   onError(cb: ASRErrorCallback): void { this.#onError = cb; }
-  onReady(_cb: () => void): void {}
+
+  onReady(cb: () => void): void {
+    // 当前 Azure ASR 为 stub（需安装 microsoft-cognitiveservices-speech-sdk）
+    // 直接触发 ready 回调以便前端获取状态，但不会产生转写结果
+    process.stderr.write("[AzureASR] stub mode — no real ASR results will be produced\n");
+    process.stderr.write("[AzureASR] to enable: npm install microsoft-cognitiveservices-speech-sdk and uncomment implementation\n");
+    cb();
+  }
 }

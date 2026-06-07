@@ -1,5 +1,5 @@
-// AudioPipelineUseCase.ts — 音频管道用例
-// 只负责编排：调领域服务 → 通过输出端口推送结果
+// AudioPipelineUseCase.ts — 音频管道用例（v4）
+// 编排：调领域服务 → 通过输出端口推送结果
 
 import type { AudioPipeline } from "../domain/AudioPipeline.service";
 import type { PipelineOutputPort } from "../domain/PipelineOutputPort.port";
@@ -17,16 +17,8 @@ export class AudioPipelineUseCase {
     await this.pipeline.start(session, this.output);
 
     this.pipeline.setCallbacks(
-      (segment) => {
-        if (this.output.isAvailable()) {
-          this.output.sendSegment(segment);
-        }
-      },
-      (text, timestamp) => {
-        if (this.output.isAvailable()) {
-          this.output.sendPartial(text, timestamp);
-        }
-      },
+      () => {},
+      () => {},
       (error) => {
         if (this.output.isAvailable()) {
           this.output.sendError("PIPELINE_ERROR", error.message);

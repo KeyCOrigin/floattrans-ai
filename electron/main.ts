@@ -2,7 +2,7 @@ import { app, BrowserWindow, screen, ipcMain, session } from "electron";
 import path from "path";
 
 let controlWindow: BrowserWindow | null = null;
-let overlayWindow: BrowserWindow | null = null;
+let viewerWindow: BrowserWindow | null = null;
 
 const isDev = !app.isPackaged;
 
@@ -30,24 +30,25 @@ function createControlWindow(): void {
   });
 }
 
-function createOverlayWindow(widthPercent: number = 60): void {
+function createViewerWindow(): void {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-  const overlayW = Math.round(width * widthPercent / 100);
-  const overlayH = 680;
+  const viewerW = 500;
+  const viewerH = 700;
 
-  overlayWindow = new BrowserWindow({
-    width: overlayW,
-    height: overlayH,
-    minWidth: 400,
-    minHeight: 200,
-    x: Math.floor((width - overlayW) / 2),
-    y: height - overlayH - 30,
+  viewerWindow = new BrowserWindow({
+    width: viewerW,
+    height: viewerH,
+    minWidth: 320,
+    minHeight: 300,
+    x: Math.floor((width - viewerW) / 2),
+    y: Math.floor((height - viewerH) / 2),
     frame: false,
-    transparent: true,
-    alwaysOnTop: true,
+    transparent: false,
+    backgroundColor: "#1a1a1a",
+    alwaysOnTop: false,
     resizable: true,
-    skipTaskbar: true,
-    focusable: false,
+    skipTaskbar: false,
+    title: "FloatTrans — 实时同传文档",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -55,86 +56,64 @@ function createOverlayWindow(widthPercent: number = 60): void {
     },
   });
 
-  // 崩溃诊断
-  overlayWindow.webContents.on("render-process-gone", (_event, details) => {
-    console.error("[overlay] render-process-gone:", details.reason, details.exitCode);
-  });
-  overlayWindow.on("closed", () => {
-    overlayWindow = null;
-  });
-
   if (isDev) {
-    overlayWindow.loadURL("http://localhost:5173/overlay.html");
+    viewerWindow.loadURL("http://localhost:5173/overlay.html");
   } else {
-    overlayWindow.loadFile(path.join(__dirname, "../dist/overlay.html"));
+    viewerWindow.loadFile(path.join(__dirname, "../dist/overlay.html"));
   }
-}
 
-// 权限处理：允许 media 音频权限（麦克风/虚拟声卡采集必需）
-// IPC 转发：控制窗口 → 悬浮字幕窗口
-ipcMain.on("subtitle:update", (_event, payload) => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send("subtitle:update", payload);
-  }
-});
+  viewerWindow.on("closed", () => {
+    viewerWindow = null;
+  });
 
-// 弹幕 IPC 转发
-const DANMAKU_CHANNELS = [
-  "danmaku:push",
-  "danmaku:update",
-  "danmaku:correct",
-  "danmaku:evict",
-  "danmaku:clear",
-] as const;
-
-for (const channel of DANMAKU_CHANNELS) {
-  ipcMain.on(channel, (_event, payload) => {
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.webContents.send(channel, payload);
+  // 页面加载完成后补发积压的样式消息
+  viewerWindow.webContents.on("did-finish-load", () => {
+    if (viewerWindow && !viewerWindow.isDestroyed() && pendingStyle !== null) {
+      viewerWindow.webContents.send("overlay:applyStyle", pendingStyle);
     }
   });
 }
 
-// Click-through 切换：overlay 窗口鼠标穿透开关
-ipcMain.on("overlay:setClickThrough", (_event, enabled: boolean) => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.setIgnoreMouseEvents(enabled);
+/** 缓存最近一次样式，在 overlay 页面加载完成后补发 */
+let pendingStyle: unknown = null;
+
+// === Markdown 文档流 IPC 转发（控制面板 → 阅读器窗口）===
+ipcMain.on("document:content", (_event, payload) => {
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
+    viewerWindow.webContents.send("document:content", payload);
   }
 });
 
-// 叠加窗口大小控制（width/height=0 表示保持当前值）
-ipcMain.on("overlay:resize", (_event, width: number, height: number) => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    const [currentW, currentH] = overlayWindow.getSize();
-    const w = width > 0 ? Math.round(width) : currentW;
-    const h = height > 0 ? Math.round(height) : currentH;
-    overlayWindow.setSize(w, h);
+ipcMain.on("document:clear", () => {
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
+    viewerWindow.webContents.send("document:clear");
   }
 });
 
-// 样式同步：控制面板 → 叠加窗口
+// 样式同步：控制面板 → 阅读器窗口
 ipcMain.on("overlay:applyStyle", (_event, payload) => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send("overlay:applyStyle", payload);
+  pendingStyle = payload;
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
+    viewerWindow.webContents.send("overlay:applyStyle", payload);
   }
 });
 
-// 叠加窗口按需启停：播放时创建（传入当前宽度百分比），停止时销毁
-ipcMain.on("overlay:open", (_event, widthPercent?: number) => {
-  if (!overlayWindow || overlayWindow.isDestroyed()) {
-    createOverlayWindow(widthPercent);
+// 阅读器窗口按需启停
+ipcMain.on("viewer:open", () => {
+  if (!viewerWindow || viewerWindow.isDestroyed()) {
+    createViewerWindow();
   }
 });
 
-ipcMain.on("overlay:close", () => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.close();
-    overlayWindow = null;
+ipcMain.on("viewer:close", () => {
+  if (viewerWindow && !viewerWindow.isDestroyed()) {
+    viewerWindow.close();
+    viewerWindow = null;
+    pendingStyle = null;
   }
 });
 
 app.whenReady().then(() => {
-  // CSP：通过 session API 设置才能被 Electron 安全系统识别，消除控制台警告
   if (isDev) {
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
       callback({
@@ -148,7 +127,6 @@ app.whenReady().then(() => {
     });
   }
 
-  // 媒体权限：允许麦克风/虚拟声卡采集
   session.defaultSession.setPermissionRequestHandler(
     (_webContents, permission, callback) => {
       const allowed = ["media"];
@@ -162,7 +140,6 @@ app.whenReady().then(() => {
   );
 
   createControlWindow();
-  // overlay 窗口按需创建：播放时由 ControlPanel 通过 overlay:open IPC 触发
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -1,14 +1,10 @@
 // BaiduNMTService.ts — 百度翻译 NMT 服务
-// 实现 INMTService，低延迟英文→中文翻译（目标 < 400ms）
-// 职责：纯文本映射，无上下文，无修正逻辑
+// 实现 INMTService，低延迟英文→中文翻译
 //
-// 百度通用翻译 API 文档：https://api.fanyi.baidu.com/doc/21
-// 签名规则：MD5(appid + q + salt + secretKey)
-//
-// 配置环境变量：
-//   NMT_PROVIDER=baidu
-//   BAIDU_APP_ID=xxx
-//   BAIDU_API_KEY=xxx (即 secretKey)
+// v2 改进：
+//   - AbortSignal.timeout(2500) 防止请求挂起
+//   - 耗时日志：区分网络等待 vs 百度处理
+//   - Node.js 内置 fetch 默认连接复用（undici keep-alive 5s）
 
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -19,6 +15,7 @@ import { TranslationError } from "../../../../../shared/errors/AppError";
 dns.setDefaultResultOrder("ipv4first");
 
 const BAIDU_API = "https://fanyi-api.baidu.com/api/trans/vip/translate";
+const NMT_TIMEOUT_MS = 2500;
 
 interface BaiduTranslateResponse {
   from?: string;
@@ -59,17 +56,38 @@ export class BaiduNMTService implements INMTService {
       sign,
     });
 
-    const response = await fetch(`${BAIDU_API}?${params.toString()}`, {
-      method: "GET",
-    });
+    const startMs = Date.now();
+
+    let response: Response;
+    try {
+      response = await fetch(`${BAIDU_API}?${params.toString()}`, {
+        method: "GET",
+        signal: AbortSignal.timeout(NMT_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const elapsed = Date.now() - startMs;
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        process.stderr.write(`[BaiduNMT] TIMEOUT after ${elapsed}ms: "${text.slice(0, 50)}"\n`);
+        throw new TranslationError(`Baidu NMT timeout after ${NMT_TIMEOUT_MS}ms`);
+      }
+      process.stderr.write(`[BaiduNMT] FETCH ERROR after ${elapsed}ms: ${message}\n`);
+      throw new TranslationError(`Baidu NMT fetch error: ${message}`);
+    }
+
+    const networkMs = Date.now() - startMs;
 
     if (!response.ok) {
-      throw new TranslationError(
-        `Baidu NMT HTTP error: ${response.status}`,
-      );
+      throw new TranslationError(`Baidu NMT HTTP error: ${response.status}`);
     }
 
     const data: BaiduTranslateResponse = await response.json();
+    const totalMs = Date.now() - startMs;
+
+    process.stderr.write(
+      `[BaiduNMT] network=${networkMs}ms json=${totalMs - networkMs}ms ` +
+      `total=${totalMs}ms text="${text.slice(0, 40)}"\n`,
+    );
 
     if (data.error_code) {
       throw new TranslationError(
