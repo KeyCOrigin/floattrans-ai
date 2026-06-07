@@ -1,0 +1,35 @@
+.container {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 8px 16px;
+  user-select: none;
+  /* 允许拖拽悬浮窗（模仿 LiveCaptions-Translator 的 DragMove） */
+  -webkit-app-region: drag;
+}
+
+/* 顶部控制栏容器：鼠标进入时显示 */
+.controlsWrapper {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+}
+
+.entryList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  max-height: 100%;
+  /* 卡片区域不拦截点击，让拖拽事件穿透到 container */
+  pointer-events: none;
+}

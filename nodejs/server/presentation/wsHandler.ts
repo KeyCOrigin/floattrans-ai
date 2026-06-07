@@ -6,7 +6,7 @@ import type { InMemorySessionRepository } from "../modules/session/infrastructur
 import { Session } from "../modules/session/domain/Session.entity";
 import type { AudioFormat } from "../modules/session/domain/AudioFormat.value-object";
 import { AudioPipelineUseCase } from "../modules/pipeline/application/AudioPipelineUseCase";
-import type { PipelineOutputPort, PipelineStatus } from "../modules/pipeline/domain/PipelineOutputPort.port";
+import type { PipelineOutputPort, PipelineStatus, DanmakuEntrySnapshot } from "../modules/pipeline/domain/PipelineOutputPort.port";
 import type { AudioPipeline } from "../modules/pipeline/domain/AudioPipeline.service";
 
 interface RawMessage {
@@ -42,6 +42,18 @@ function createOutputAdapter(ws: WebSocket): PipelineOutputPort {
     },
     isAvailable(): boolean {
       return ws.readyState === WS_OPEN;
+    },
+    sendDanmakuPush(entry: DanmakuEntrySnapshot): void {
+      ws.send(JSON.stringify({ type: "danmaku:push" as const, ...entry }));
+    },
+    sendDanmakuUpdate(id: string, chinese: string, isComplete: boolean): void {
+      ws.send(JSON.stringify({ type: "danmaku:update" as const, id, chinese, isComplete }));
+    },
+    sendDanmakuCorrect(id: string, oldChinese: string, newChinese: string): void {
+      ws.send(JSON.stringify({ type: "danmaku:correct" as const, id, oldChinese, newChinese }));
+    },
+    sendDanmakuEvict(id: string): void {
+      ws.send(JSON.stringify({ type: "danmaku:evict" as const, id }));
     },
   };
 }

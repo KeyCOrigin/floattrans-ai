@@ -6,6 +6,7 @@ import type { IWebSocketClient, SessionAudioFormat } from "../domain/IWebSocketC
 import type { IAudioCaptureService } from "../../audio/domain/IAudioCaptureService";
 import type { AudioChunk } from "../../audio/domain/AudioChunk.value-object";
 import { ConnectionError } from "../../../../../shared/errors/AppError";
+import type { DanmakuStatus } from "../../../types/subtitle";
 
 export type InputMode = "demo" | "microphone" | "system-audio";
 
@@ -28,6 +29,22 @@ export interface SubtitleEvent {
   readonly endTime?: number;
 }
 
+/** 弹幕事件回调接口 */
+export interface DanmakuCallbacks {
+  onDanmakuPush?: (payload: {
+    id: string; english: string; chinese: string;
+    status: DanmakuStatus; confidence: number;
+  }) => void;
+  onDanmakuUpdate?: (payload: {
+    id: string; chinese: string; isComplete: boolean;
+  }) => void;
+  onDanmakuCorrect?: (payload: {
+    id: string; oldChinese: string; newChinese: string;
+  }) => void;
+  onDanmakuEvict?: (payload: { id: string }) => void;
+  onDanmakuClear?: () => void;
+}
+
 interface WsMessage {
   type: string;
   // pipeline:status
@@ -45,6 +62,11 @@ interface WsMessage {
   segmentId?: string;
   startTime?: number;
   endTime?: number;
+  // danmaku:*
+  id?: string;
+  isComplete?: boolean;
+  oldChinese?: string;
+  newChinese?: string;
 }
 
 const LIVE_AUDIO_FORMAT: SessionAudioFormat = {
@@ -68,6 +90,7 @@ export class StartSessionUseCase {
     deviceId: string | undefined,
     onPipelineEvent?: (event: PipelineStatusEvent) => void,
     onSubtitle?: (event: SubtitleEvent) => void,
+    danmaku?: DanmakuCallbacks,
   ): Promise<StartSessionResult> {
     const session = FrontendSession.create(mode === "demo" ? "demo" : "live", wsEndpoint);
 
@@ -111,6 +134,28 @@ export class StartSessionUseCase {
             startTime: msg.startTime,
             endTime: msg.endTime,
           });
+        } else if (msg.type === "danmaku:push" && danmaku?.onDanmakuPush) {
+          danmaku.onDanmakuPush({
+            id: msg.id ?? "",
+            english: msg.english ?? "",
+            chinese: msg.chinese ?? "",
+            status: (msg.status as DanmakuStatus) ?? "draft",
+            confidence: msg.confidence ?? 0.85,
+          });
+        } else if (msg.type === "danmaku:update" && danmaku?.onDanmakuUpdate) {
+          danmaku.onDanmakuUpdate({
+            id: msg.id ?? "",
+            chinese: msg.chinese ?? "",
+            isComplete: msg.isComplete ?? false,
+          });
+        } else if (msg.type === "danmaku:correct" && danmaku?.onDanmakuCorrect) {
+          danmaku.onDanmakuCorrect({
+            id: msg.id ?? "",
+            oldChinese: msg.oldChinese ?? "",
+            newChinese: msg.newChinese ?? "",
+          });
+        } else if (msg.type === "danmaku:evict" && danmaku?.onDanmakuEvict) {
+          danmaku.onDanmakuEvict({ id: msg.id ?? "" });
         }
       });
 

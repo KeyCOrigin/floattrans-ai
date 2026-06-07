@@ -1,10 +1,12 @@
 // OpenAICompatibleTranslationService.ts — 通用 OpenAI 兼容翻译服务
 // 实现 ITranslationService，支持 OpenAI / DeepSeek / 硅基流动 / 阿里百炼 / 智谱 等
 // 通过构造函数注入 TranslationProviderConfig 切换供应商
+//
+// 注意：此服务为纯翻译路径（向后兼容保留），
+// 双路径架构中 NMT+LLM 修正由 INMTService + ICorrectionService 负责
 
 import type { ITranslationService, TranslationRequest } from "../domain/ITranslationService.port";
 import type { TranslationResult } from "../domain/TranslationResult.value-object";
-import type { CorrectionSuggestion } from "../domain/CorrectionSuggestion.value-object";
 import type { CorrectionPrompt } from "../domain/ContextCorrectionEngine.service";
 import type { TranslationProviderConfig } from "../domain/TranslationProviderConfig.value-object";
 import type { ContextEntry } from "../domain/ContextEntry.value-object";
@@ -12,14 +14,6 @@ import { TranslationError } from "../../../../../shared/errors/AppError";
 
 interface TranslationResponse {
   translation: string;
-  corrections?: Array<{
-    targetIndex: number;
-    oldEnglish: string;
-    newEnglish: string;
-    oldChinese: string;
-    newChinese: string;
-    reason: string;
-  }>;
 }
 
 function isTranslationResponse(obj: unknown): obj is TranslationResponse {
@@ -73,21 +67,12 @@ export class OpenAICompatibleTranslationService implements ITranslationService {
     try {
       const parsed: unknown = JSON.parse(content);
       if (!isTranslationResponse(parsed)) {
-        return { translation: originalText, corrections: [], originalText };
+        return { translation: originalText, originalText };
       }
 
-      const corrections: CorrectionSuggestion[] = (parsed.corrections ?? []).map((c) => ({
-        targetSegmentId: `seg_${String(c.targetIndex).padStart(3, "0")}`,
-        oldEnglish: c.oldEnglish,
-        newEnglish: c.newEnglish,
-        oldChinese: c.oldChinese,
-        newChinese: c.newChinese,
-        reason: c.reason,
-      }));
-
-      return { translation: parsed.translation, corrections, originalText };
+      return { translation: parsed.translation, originalText };
     } catch {
-      return { translation: originalText, corrections: [], originalText };
+      return { translation: originalText, originalText };
     }
   }
 }
