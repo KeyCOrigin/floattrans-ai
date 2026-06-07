@@ -30,16 +30,18 @@ function createControlWindow(): void {
   });
 }
 
-function createOverlayWindow(): void {
+function createOverlayWindow(widthPercent: number = 60): void {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const overlayW = Math.round(width * widthPercent / 100);
+  const overlayH = 680;
 
   overlayWindow = new BrowserWindow({
-    width: 800,
-    height: 400,
+    width: overlayW,
+    height: overlayH,
     minWidth: 400,
-    minHeight: 100,
-    x: Math.floor((width - 800) / 2),
-    y: height - 440,
+    minHeight: 200,
+    x: Math.floor((width - overlayW) / 2),
+    y: height - overlayH - 30,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -100,10 +102,13 @@ ipcMain.on("overlay:setClickThrough", (_event, enabled: boolean) => {
   }
 });
 
-// 叠加窗口大小控制
+// 叠加窗口大小控制（width/height=0 表示保持当前值）
 ipcMain.on("overlay:resize", (_event, width: number, height: number) => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.setSize(Math.round(width), Math.round(height));
+    const [currentW, currentH] = overlayWindow.getSize();
+    const w = width > 0 ? Math.round(width) : currentW;
+    const h = height > 0 ? Math.round(height) : currentH;
+    overlayWindow.setSize(w, h);
   }
 });
 
@@ -111,6 +116,20 @@ ipcMain.on("overlay:resize", (_event, width: number, height: number) => {
 ipcMain.on("overlay:applyStyle", (_event, payload) => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send("overlay:applyStyle", payload);
+  }
+});
+
+// 叠加窗口按需启停：播放时创建（传入当前宽度百分比），停止时销毁
+ipcMain.on("overlay:open", (_event, widthPercent?: number) => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) {
+    createOverlayWindow(widthPercent);
+  }
+});
+
+ipcMain.on("overlay:close", () => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.close();
+    overlayWindow = null;
   }
 });
 
@@ -122,7 +141,7 @@ app.whenReady().then(() => {
         responseHeaders: {
           ...details.responseHeaders,
           "Content-Security-Policy": [
-            "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* http://localhost:*; img-src 'self' data:; font-src 'self' data:",
+            "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' ws://localhost:* http://localhost:*; img-src 'self' data:; font-src 'self' data: https://fonts.gstatic.com",
           ],
         },
       });
@@ -143,12 +162,11 @@ app.whenReady().then(() => {
   );
 
   createControlWindow();
-  createOverlayWindow();
+  // overlay 窗口按需创建：播放时由 ControlPanel 通过 overlay:open IPC 触发
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createControlWindow();
-      createOverlayWindow();
     }
   });
 });

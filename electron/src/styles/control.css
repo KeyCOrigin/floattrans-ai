@@ -1,37 +1,56 @@
 /* ── FloatTrans AI Control Panel ──
-   Dark theme inspired by Catppuccin Mocha + LiveCaptions-Translator aesthetics */
+   LiveCaptions-Translator 同款设计：对比靠表面层次，不靠装饰效果。
+   Overlay: #80000000 (50% black) single dark panel over transparent desktop.
+   Control Panel: WPF UI Dark theme style — simple dark surfaces, no glass effects. */
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg-base: #1e1e2e;
-  --bg-surface: #181825;
-  --bg-elevated: #11111b;
-  --border: #313244;
-  --border-hover: #45475a;
-  --text-primary: #cdd6f4;
-  --text-secondary: #a6adc8;
-  --text-muted: #6c7086;
-  --accent: #2a2a2a;
-  --accent-dim: rgba(42, 42, 42, 0.3);
-  --green: #a6e3a1;
-  --green-dim: rgba(166, 227, 161, 0.15);
-  --red: #f38ba8;
-  --red-dim: rgba(243, 139, 168, 0.15);
-  --yellow: #f9e2af;
-  --yellow-dim: rgba(249, 226, 175, 0.15);
-  --blue: #89b4fa;
-  --blue-dim: rgba(137, 180, 250, 0.12);
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
-  --font-mono: "Cascadia Code", "JetBrains Mono", "Consolas", monospace;
+  /* ═══════════════════════════════════════════════════
+     FloatTrans — LiveCaptions-Translator 同款色彩对比
+     层次靠表面明度差异，不靠内阴影/边框装饰/渐变。
+     overlay = 透明桌面 → 50% 黑色面板 → 白色文字
+     control panel = 深灰底 → 略亮卡片 → 白色内容
+     ═══════════════════════════════════════════════════ */
+
+  /* ── Surface layers (明度对比，2级足够) ── */
+  --bg-app:     #1a1a1a;   /* 窗口底色 (≈ WPF UI ApplicationBackground) */
+  --bg-surface: #282828;   /* 卡片/区块表面 (≈ WPF UI CardBackgroundFillColorDefault) */
+
+  /* ── Borders (最简) ── */
+  --border: #3a3a3a;       /* 唯一边框色 (≈ WPF UI CardStrokeColorDefault) */
+
+  /* ── Text — 白/灰/暗灰三级 ── */
+  --text-primary:   #ffffff;
+  --text-secondary: #9e9e9e;
+  --text-muted:     #5e5e5e;
+
+  /* ── Accent — WPF UI 系统蓝，克制使用 ── */
+  --accent:     #4791ff;
+  --accent-dim: rgba(71, 145, 255, 0.08);
+
+  /* ── Semantic ── */
+  --danger:      #e04040;
+  --danger-dim:  rgba(224, 64, 64, 0.08);
+
+  /* ── Misc ── */
+  --hover-bright: #333333;
+  --scroll-hover: #555555;
+
+  /* ── Typography ── */
+  --font-display: "Geist", "Outfit", system-ui, sans-serif;
+  --font-body: "Geist", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", "Consolas", monospace;
+
+  /* ── Radius ── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
 }
 
 body {
-  font-family: var(--font-sans);
-  background: var(--bg-base);
+  font-family: var(--font-body);
+  background: var(--bg-app);
   color: var(--text-primary);
   -webkit-user-select: none;
   user-select: none;
@@ -43,7 +62,7 @@ body {
 .control-panel::-webkit-scrollbar { width: 6px; }
 .control-panel::-webkit-scrollbar-track { background: transparent; }
 .control-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-.control-panel::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+.control-panel::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); }
 
 /* ── Layout ── */
 
@@ -59,36 +78,57 @@ body {
 /* ── Header ── */
 
 .control-header {
-  text-align: center;
   padding-bottom: 8px;
 }
 
 .control-header h1 {
+  font-family: var(--font-display);
   font-size: 22px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.3px;
 }
 
 .subtitle-text {
   font-size: 12px;
+  font-family: var(--font-mono);
   color: var(--text-muted);
   margin-top: 2px;
 }
 
 .status-text {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 8px;
-  padding: 2px 12px;
-  border-radius: 20px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--green);
-  background: var(--green-dim);
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
-/* ── Mode Toggle (pill style) ── */
+.status-text::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* ── Mode Toggle (segmented control) ── */
 
 .mode-toggle {
   display: flex;
@@ -96,40 +136,38 @@ body {
   border-radius: var(--radius-sm);
   overflow: hidden;
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--bg-app);
+  gap: 1px;
 }
 
 .mode-btn {
   flex: 1;
-  padding: 7px 10px;
+  padding: 7px 12px;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-body);
   cursor: pointer;
-  transition: background 0.2s, color 0.2s;
-  position: relative;
-}
-
-.mode-btn:not(:last-child)::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  top: 20%;
-  height: 60%;
-  width: 1px;
-  background: var(--border);
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 .mode-btn.active {
-  background: var(--accent);
-  color: #fff;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--text-secondary);
 }
 
 .mode-btn:hover:not(.active) {
   color: var(--text-secondary);
-  background: rgba(205, 214, 244, 0.05);
+  background: var(--bg-surface);
+}
+
+.mode-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--text-secondary);
+  z-index: 1;
 }
 
 /* ── Environment Warning ── */
@@ -137,13 +175,14 @@ body {
 .env-warning {
   margin-top: 12px;
   padding: 10px 14px;
-  background: var(--yellow-dim);
-  border: 1px solid rgba(249, 226, 175, 0.3);
+  background: var(--bg-app);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
-  color: var(--yellow);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
   line-height: 1.6;
-  text-align: center;
+  text-align: left;
 }
 
 /* ── Sections ── */
@@ -158,10 +197,11 @@ body {
 
 .control-section h3 {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
+  font-family: var(--font-mono);
   color: var(--text-muted);
+  letter-spacing: 0.5px;
   text-transform: uppercase;
-  letter-spacing: 1.2px;
   margin-bottom: 14px;
 }
 
@@ -178,10 +218,10 @@ body {
   border: none;
   border-radius: var(--radius-sm);
   font-size: 13px;
-  font-weight: 600;
-  font-family: var(--font-sans);
+  font-weight: 500;
+  font-family: var(--font-body);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.2s ease;
 }
 
 .btn:active:not(:disabled) {
@@ -191,31 +231,43 @@ body {
 .btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
-  transform: none;
 }
 
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--bg-app), 0 0 0 3px var(--text-secondary);
+}
+
+/* primary action — white-on-dark, LiveCaptions-Translator 风格 */
 .btn-play {
-  background: var(--green);
-  color: var(--bg-base);
+  flex: 1.5;
+  background: var(--text-primary);
+  color: var(--bg-app);
+  letter-spacing: 0.3px;
+  font-weight: 600;
 }
 .btn-play:hover:not(:disabled) {
-  background: #b8f0b0;
+  background: var(--bg-surface);
 }
 
+/* secondary */
 .btn-pause {
-  background: var(--yellow);
-  color: var(--bg-base);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
 }
 .btn-pause:hover:not(:disabled) {
-  background: #fbecc0;
+  background: var(--hover-bright);
+  color: var(--text-primary);
 }
 
 .btn-stop {
-  background: var(--red);
-  color: var(--bg-base);
+  background: var(--bg-app);
+  color: var(--danger);
+  border: 1px solid var(--danger-dim);
 }
 .btn-stop:hover:not(:disabled) {
-  background: #f5a0b5;
+  background: var(--danger-dim);
 }
 
 /* ── Checkbox ── */
@@ -238,8 +290,13 @@ body {
 .checkbox-label input[type="checkbox"] {
   width: 16px;
   height: 16px;
-  accent-color: var(--text-muted);
+  accent-color: var(--accent);
   cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 /* ── Sliders ── */
@@ -269,8 +326,13 @@ body {
 .slider-group input[type="range"] {
   width: 100%;
   height: 4px;
-  accent-color: var(--text-muted);
+  accent-color: var(--accent);
   cursor: pointer;
+}
+
+.slider-group input[type="range"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 /* ── Color Picker ── */
@@ -302,6 +364,11 @@ body {
   border: none;
 }
 
+.color-group input[type="color"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
 .color-value {
   color: var(--text-secondary);
   font-family: var(--font-mono);
@@ -312,7 +379,7 @@ body {
 
 .preview-box {
   padding: 14px;
-  background: var(--bg-elevated);
+  background: var(--bg-app);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   min-height: 48px;
@@ -322,23 +389,43 @@ body {
 }
 
 .preview-en {
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 500;
   color: var(--text-primary);
   margin-bottom: 4px;
   line-height: 1.5;
 }
 
+.preview-en::before {
+  content: "EN  ";
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  margin-right: 6px;
+}
+
 .preview-zh {
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 400;
   color: var(--text-secondary);
   line-height: 1.5;
 }
 
-.preview-empty {
-  font-size: 13px;
+.preview-zh::before {
+  content: "ZH  ";
+  font-family: var(--font-mono);
+  font-size: 9px;
   color: var(--text-muted);
-  text-align: center;
-  opacity: 0.6;
+  letter-spacing: 0.5px;
+  margin-right: 6px;
+}
+
+.preview-empty {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  opacity: 0.4;
 }
 
 /* ── Device Selector ── */
@@ -354,10 +441,10 @@ body {
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  background: var(--bg-surface);
   color: var(--text-primary);
   font-size: 12px;
-  font-family: var(--font-sans);
+  font-family: var(--font-body);
   cursor: pointer;
 }
 
@@ -366,23 +453,28 @@ body {
   cursor: not-allowed;
 }
 
+.device-select:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
 .btn-refresh {
   padding: 8px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  background: var(--bg-surface);
   color: var(--text-secondary);
   font-size: 12px;
-  font-weight: 600;
-  font-family: var(--font-sans);
+  font-weight: 500;
+  font-family: var(--font-body);
   cursor: pointer;
   white-space: nowrap;
   transition: border-color 0.2s, color 0.2s;
 }
 
 .btn-refresh:hover:not(:disabled) {
-  border-color: var(--text-primary);
-  color: var(--text-primary);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .btn-refresh:disabled {
@@ -390,22 +482,29 @@ body {
   cursor: not-allowed;
 }
 
+.btn-refresh:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 /* ── Status Indicators ── */
 
 .perm-status {
-  font-size: 11px;
-  color: var(--green);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
   margin-bottom: 8px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .pipeline-status {
   margin-top: 8px;
   padding: 6px 12px;
-  background: var(--accent-dim);
+  background: var(--bg-app);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: 10px;
+  font-family: var(--font-mono);
   color: var(--text-secondary);
   font-weight: 500;
 }
@@ -413,11 +512,12 @@ body {
 .live-error {
   margin-top: 8px;
   padding: 8px 12px;
-  background: var(--red-dim);
-  border: 1px solid rgba(243, 139, 168, 0.3);
+  background: var(--bg-app);
+  border: 1px solid var(--danger-dim);
   border-radius: var(--radius-sm);
   font-size: 11px;
-  color: var(--red);
+  font-family: var(--font-mono);
+  color: var(--danger);
   line-height: 1.5;
 }
 
@@ -426,16 +526,20 @@ body {
 .hint-box {
   margin-bottom: 12px;
   padding: 10px 14px;
-  background: var(--blue-dim);
-  border: 1px solid rgba(137, 180, 250, 0.25);
+  background: var(--bg-app);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 11px;
-  color: var(--blue);
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 
+.hint-box strong {
+  color: var(--text-primary);
+}
+
 .hint-box a {
-  color: var(--blue);
+  color: var(--text-secondary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -445,7 +549,7 @@ body {
 .correction-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   max-height: 200px;
   overflow-y: auto;
 }
@@ -455,36 +559,38 @@ body {
 .correction-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 .correction-entry {
-  padding: 10px 12px;
-  background: var(--bg-elevated);
+  padding: 8px 10px;
+  background: var(--bg-app);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   transition: border-color 0.2s;
+  font-family: var(--font-mono);
 }
 
 .correction-entry:hover {
-  border-color: var(--border-hover);
+  border-color: var(--scroll-hover);
 }
 
 .correction-change {
-  font-size: 12px;
-  margin-bottom: 4px;
+  font-size: 11px;
+  margin-bottom: 3px;
 }
 
 .correction-old {
-  color: var(--red);
+  color: var(--danger);
   text-decoration: line-through;
-  text-decoration-color: rgba(243, 139, 168, 0.5);
+  text-decoration-color: var(--danger);
+  opacity: 0.5;
   margin-right: 4px;
 }
 
 .correction-arrow {
   color: var(--text-muted);
-  margin: 0 2px;
+  margin: 0 3px;
 }
 
 .correction-new {
-  color: var(--green);
+  color: var(--text-primary);
   font-weight: 600;
 }
 
@@ -493,10 +599,41 @@ body {
   color: var(--text-muted);
   line-height: 1.5;
   margin-top: 2px;
+  font-family: var(--font-body);
 }
 
 /* ── Preview Section (bottom) ── */
 
 .preview-section {
   margin-bottom: 8px;
+}
+
+/* ── Empty state ── */
+
+.correction-empty {
+  padding: 20px 0;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+/* ── Subtitle FLIP animations ── */
+
+.subtitle-line.entering {
+  animation: slideUpFadeIn 0.2s ease;
+}
+
+.subtitle-line.exiting {
+  animation: fadeOut 0.15s ease forwards;
+}
+
+@keyframes slideUpFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeOut {
+  to { opacity: 0; }
 }

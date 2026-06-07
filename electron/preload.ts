@@ -86,6 +86,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 叠加窗口大小控制
   resizeOverlay: (width: number, height: number) =>
     ipcRenderer.send("overlay:resize", width, height),
+  // 叠加窗口按需启停
+  openOverlay: (widthPercent?: number) =>
+    ipcRenderer.send("overlay:open", widthPercent),
+  closeOverlay: () =>
+    ipcRenderer.send("overlay:close"),
 
   // 样式同步：控制面板 → overlay 弹幕字幕
   applyOverlayStyle: (payload: unknown) =>

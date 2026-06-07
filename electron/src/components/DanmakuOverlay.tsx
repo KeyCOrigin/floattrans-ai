@@ -11,7 +11,8 @@ import styles from "./styles/danmaku-overlay.module.css";
 const DEFAULT_FONT_SIZE = 14;
 const FONT_MIN = 10;
 const FONT_MAX = 28;
-const HIDE_DELAY_MS = 400;
+const HIDE_DELAY_MS = 250;
+const MAX_VISIBLE_ENTRIES = 10;
 
 function styleToDisplayMode(showEnglish: boolean, showChinese: boolean): DisplayMode {
   if (showEnglish && showChinese) return "both";
@@ -53,8 +54,26 @@ export function DanmakuOverlay() {
     };
   }, []);
 
-  // 防止工具栏出现/消失死循环：离开 container 后延迟隐藏，进入工具栏则取消
+  // 悬停状态跟踪：单一 ref 避免 enter/leave 竞态
+  const hoverRef = useRef(false);
+  // 隐藏定时器 ref
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelHideTimer = useCallback(() => {
+    if (hideTimerRef.current !== null) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleHide = useCallback(() => {
+    cancelHideTimer();
+    hideTimerRef.current = setTimeout(() => {
+      if (!hoverRef.current) {
+        setShowControls(false);
+      }
+    }, HIDE_DELAY_MS);
+  }, [cancelHideTimer]);
 
   const handleAnimationEnd = useCallback(
     (id: string) => {
@@ -92,34 +111,28 @@ export function DanmakuOverlay() {
     });
   }, []);
 
-  // --- 悬停控制栏显隐：去抖避免 enter/leave 死循环 ---
+  // --- 悬停控制栏显隐 ---
 
   const handleContainerEnter = useCallback(() => {
-    if (hideTimerRef.current !== null) {
-      clearTimeout(hideTimerRef.current);
-      hideTimerRef.current = null;
-    }
+    hoverRef.current = true;
+    cancelHideTimer();
     setShowControls(true);
-  }, []);
+  }, [cancelHideTimer]);
 
   const handleContainerLeave = useCallback(() => {
-    hideTimerRef.current = setTimeout(() => {
-      setShowControls(false);
-    }, HIDE_DELAY_MS);
-  }, []);
+    hoverRef.current = false;
+    scheduleHide();
+  }, [scheduleHide]);
 
   const handleControlsEnter = useCallback(() => {
-    if (hideTimerRef.current !== null) {
-      clearTimeout(hideTimerRef.current);
-      hideTimerRef.current = null;
-    }
-  }, []);
+    hoverRef.current = true;
+    cancelHideTimer();
+  }, [cancelHideTimer]);
 
   const handleControlsLeave = useCallback(() => {
-    hideTimerRef.current = setTimeout(() => {
-      setShowControls(false);
-    }, HIDE_DELAY_MS);
-  }, []);
+    hoverRef.current = false;
+    scheduleHide();
+  }, [scheduleHide]);
 
   const displayMode = styleToDisplayMode(overlayStyle.showEnglish, overlayStyle.showChinese);
 
@@ -155,7 +168,7 @@ export function DanmakuOverlay() {
           color: overlayStyle.subtitleColor,
         }}
       >
-        {entries.map((entry) => (
+        {entries.slice(-MAX_VISIBLE_ENTRIES).map((entry) => (
           <DanmakuEntryCard
             key={entry.id}
             entry={entry}

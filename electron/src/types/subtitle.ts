@@ -128,6 +128,8 @@ export interface ElectronAPI {
   removeDanmakuEvictListener?: (callback: (payload: DanmakuEvictPayload) => void) => void;
   removeDanmakuClearListener?: (callback: () => void) => void;
   // 悬浮窗行为控制
+  openOverlay?: (widthPercent?: number) => void;
+  closeOverlay?: () => void;
   setOverlayClickThrough?: (enabled: boolean) => void;
   resizeOverlay?: (width: number, height: number) => void;
   // 样式同步：控制面板 → overlay 弹幕字幕

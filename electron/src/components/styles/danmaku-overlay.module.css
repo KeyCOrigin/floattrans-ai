@@ -27,8 +27,9 @@
 .entryList {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
   overflow: hidden;
+  max-height: 100%;
   /* 卡片区域不拦截点击，让拖拽事件穿透到 container */
   pointer-events: none;
 }

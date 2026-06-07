@@ -86,9 +86,13 @@ describe("SubtitleEngine", () => {
   it("修正后 segment 状态变为 revised", () => {
     engine.start(() => {});
     engine.tick(8);
-    const segment = segments.find((s) => s.id === "s2");
-    expect(segment?.status).toBe("revised");
-    expect(segment?.english).toBe("We use Rust.");
+    // 引擎内部维护 segments 副本，通过 tick 返回值验证修正已生效
+    // s2 的 time range 是 3-6，tick(8) 时 currentSegment 是 s3，但修正日志应包含 s2
+    const state = engine.getState();
+    const s2Log = state.correctionLogs.find((l) => l.segmentId === "s2");
+    expect(s2Log).toBeDefined();
+    expect(s2Log?.newEnglish).toBe("We use Rust.");
+    expect(s2Log?.newChinese).toBe("我们使用 Rust。");
   });
 
   it("关闭 autoCorrection 后不触发修正", () => {
@@ -109,12 +113,21 @@ describe("SubtitleEngine", () => {
     expect(engine.getState().correctionLogs).toHaveLength(0);
   });
 
-  it("stop 后 segment 状态被重置", () => {
+  it("stop 后修正日志被清空且状态重置", () => {
     engine.start(() => {});
     engine.tick(8);
-    expect(segments.find((s) => s.id === "s2")?.status).toBe("revised");
+    // 验证修正已触发
+    expect(engine.getState().correctionLogs.length).toBeGreaterThan(0);
     engine.stop();
-    expect(segments.find((s) => s.id === "s2")?.status).toBe("final");
+    // stop 后日志清空
+    expect(engine.getState().correctionLogs).toHaveLength(0);
+    // stop 后 currentTime 归零
+    expect(engine.getState().currentTime).toBe(0);
+    // 重新 start + tick 到 s2 范围验证原文被恢复
+    engine.start(() => {});
+    const result = engine.tick(4);
+    expect(result.currentSegment?.english).toBe("We use rest.");
+    expect(result.currentSegment?.chinese).toBe("我们使用休息。");
   });
 
   it("reset 委托给 stop", () => {

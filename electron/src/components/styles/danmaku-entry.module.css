@@ -1,29 +1,33 @@
+/* ── Danmaku Entry Card ──
+   LiveCaptions-Translator 同款：单层 50% 黑色面板 + 白色文字。
+   无模糊、无边框、无内阴影、无文字阴影。对比纯靠透明度。 */
+
 .card {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   padding: 6px 14px;
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(0, 0, 0, 0.5);
   color: inherit;
   font-family:
-    -apple-system, BlinkMacSystemFont,
-    "Segoe UI", "PingFang SC", "Microsoft YaHei",
-    "Hiragino Sans GB", "Noto Sans CJK SC",
-    sans-serif;
-  line-height: 1.5;
+    "Geist",
+    "PingFang SC", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Hiragino Sans GB",
+    system-ui, sans-serif;
+  line-height: 1.4;
   pointer-events: none;
-  /* 文字描边：在任何背景上都清晰可读（模仿 LiveCaptions-Translator StrokeDecorator） */
-  text-shadow:
-    0 0 6px rgba(0, 0, 0, 0.85),
-    0 0 2px rgba(0, 0, 0, 0.9),
-    0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* 减少透明度：透明度降低时文字对比度可能不足，加深底色 */
+@media (prefers-reduced-transparency: reduce) {
+  .card {
+    background: rgba(0, 0, 0, 0.8);
+  }
 }
 
 .english {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: inherit;
   white-space: nowrap;
@@ -32,13 +36,13 @@
 }
 
 .chinese {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 400;
   color: inherit;
-  opacity: 0.85;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  opacity: 0.9;
+  /* Allow wrapping for longer Chinese translations */
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 /* 状态视觉区分 */
@@ -66,7 +70,7 @@
 
 @keyframes danmaku-slide-up {
   from {
-    transform: translateY(40px);
+    transform: translateY(24px);
     opacity: 0;
   }
   to {
@@ -75,18 +79,29 @@
   }
 }
 
-/* 修正闪烁动画 */
+/* 修正闪烁 — 灰白闪烁，从亮回到 50% 黑 */
 .anim-correct {
   animation: danmaku-correct-flash 600ms ease-out;
 }
 
 @keyframes danmaku-correct-flash {
-  0% {
-    background: rgba(255, 215, 0, 0.35);
+  0%   { background: rgba(255, 255, 255, 0.06); }
+  100% { background: rgba(0, 0, 0, 0.5); }
+}
+
+/* Reduced motion: 跳过闪烁动画 */
+@media (prefers-reduced-motion: reduce) {
+  .anim-correct {
+    animation: none;
   }
-  100% {
-    background: rgba(0, 0, 0, 0.45);
+  .anim-push {
+    animation: danmaku-fade-in 150ms ease-out;
   }
+}
+
+@keyframes danmaku-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* 推出淡出动画 */
@@ -95,12 +110,6 @@
 }
 
 @keyframes danmaku-fade-out {
-  from {
-    transform: translateY(0);
-    opacity: 1;
-  }
-  to {
-    transform: translateY(-20px);
-    opacity: 0;
-  }
+  from { transform: translateY(0);  opacity: 1; }
+  to   { transform: translateY(-12px); opacity: 0; }
 }

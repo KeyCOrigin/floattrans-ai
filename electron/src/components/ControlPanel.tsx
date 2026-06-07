@@ -49,16 +49,7 @@ export function ControlPanel() {
   const [autoCorrection, setAutoCorrection] = useState(defaultSettings.autoCorrectionEnabled);
 
   // 叠加窗口尺寸
-  const [overlayWidth, setOverlayWidth] = useState(800);
-  const [overlayHeight, setOverlayHeight] = useState(400);
-
-  const handleResizeOverlay = useCallback((w: number, h: number) => {
-    const cw = Math.max(400, Math.min(1920, w));
-    const ch = Math.max(100, Math.min(1080, h));
-    setOverlayWidth(cw);
-    setOverlayHeight(ch);
-    window.electronAPI?.resizeOverlay?.(cw, ch);
-  }, []);
+  const [overlayWidth, setOverlayWidth] = useState(60);     // 屏幕宽度百分比
 
   // 实时模式状态
   const [inputMode, setInputMode] = useState<InputMode>("demo");
@@ -87,6 +78,17 @@ export function ControlPanel() {
       showEnglish, showChinese, opacity, fontSize, subtitleColor,
     });
   }, [showEnglish, showChinese, opacity, fontSize, subtitleColor]);
+
+  // 叠加窗口宽度同步（height=0 表示保持当前高度）
+  const handleResizeOverlay = useCallback((wPercent: number) => {
+    const screenW = window.screen?.width ?? 1920;
+    const wPx = Math.round(screenW * wPercent / 100);
+    window.electronAPI?.resizeOverlay?.(wPx, 0);
+  }, []);
+
+  useEffect(() => {
+    handleResizeOverlay(overlayWidth);
+  }, [overlayWidth, handleResizeOverlay]);
 
   const emitSubtitle = useCallback(
     (segment: SubtitleSegment | null) => {
@@ -123,6 +125,7 @@ export function ControlPanel() {
     if (!engine) return;
     if (timerRef.current !== null) { clearInterval(timerRef.current); timerRef.current = null; }
     danmakuPushedRef.current.clear();
+    window.electronAPI?.openOverlay?.(overlayWidth);
     engine.start((result) => {
       const seg = result.currentSegment;
       setCurrentSubtitle(seg);
@@ -169,6 +172,7 @@ export function ControlPanel() {
     setCorrectionLogs([]);
     danmakuPushedRef.current.clear();
     window.electronAPI?.danmakuClear?.();
+    window.electronAPI?.closeOverlay?.();
     emitSubtitle(null);
   };
 
@@ -200,6 +204,7 @@ export function ControlPanel() {
       handleRefreshDevices();
       return;
     }
+    window.electronAPI?.openOverlay?.(overlayWidth);
     // 弹幕回调：转发到 Electron 覆盖窗口
     const danmakuCallbacks: DanmakuCallbacks = {
       onDanmakuPush: (p) => window.electronAPI?.danmakuPush?.(p),
@@ -287,6 +292,7 @@ export function ControlPanel() {
     liveDanmakuIdRef.current = "";
     emitSubtitleRef.current(null);
     window.electronAPI?.danmakuClear?.();
+    window.electronAPI?.closeOverlay?.();
   };
 
   const handleModeSwitch = (newMode: AppMode) => {
@@ -379,22 +385,14 @@ export function ControlPanel() {
           <label>字号 <span>{fontSize}px</span></label>
           <input type="range" min={16} max={64} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} />
         </div>
+        <div className="slider-group">
+          <label>悬浮窗宽度 <span>{overlayWidth}%</span></label>
+          <input type="range" min={30} max={100} value={overlayWidth} onChange={(e) => setOverlayWidth(Number(e.target.value))} />
+        </div>
         <div className="color-group">
           <label>颜色</label>
           <input type="color" value={subtitleColor} onChange={(e) => setSubtitleColor(e.target.value)} />
           <span className="color-value">{subtitleColor}</span>
-        </div>
-      </section>
-
-      <section className="control-section">
-        <h3>叠加窗口</h3>
-        <div className="slider-group">
-          <label>宽度 <span>{overlayWidth}px</span></label>
-          <input type="range" min={400} max={1920} step={40} value={overlayWidth} onChange={(e) => handleResizeOverlay(Number(e.target.value), overlayHeight)} />
-        </div>
-        <div className="slider-group">
-          <label>高度 <span>{overlayHeight}px</span></label>
-          <input type="range" min={100} max={1080} step={20} value={overlayHeight} onChange={(e) => handleResizeOverlay(overlayWidth, Number(e.target.value))} />
         </div>
       </section>
 

@@ -13,6 +13,16 @@ export type ASRProviderConfig =
   | { readonly provider: "azure";  readonly key: string; readonly region: string }
   | { readonly provider: "iflytek"; readonly appId: string; readonly apiKey: string; readonly apiSecret: string };
 
+// ===== NMT 供应商 =====
+
+export type NMTProviderId = "baidu" | "placeholder";
+
+export interface NMTProviderConfig {
+  readonly provider: NMTProviderId;
+  readonly appId: string;
+  readonly apiKey: string;
+}
+
 // ===== 翻译供应商模板 =====
 
 export type TranslationProviderId = "openai" | "deepseek" | "siliconflow" | "bailian" | "zhipu" | "spark";
@@ -40,6 +50,7 @@ const TRANSLATION_KEY_ENV: Record<TranslationProviderId, string> = {
 
 export interface AppConfig {
   readonly asr: ASRProviderConfig;
+  readonly nmt: NMTProviderConfig;
   readonly translation: TranslationProviderConfig;
   readonly server: { readonly port: number };
 }
@@ -97,8 +108,28 @@ function readTranslationConfig(): TranslationProviderConfig {
   return { ...template, apiKey };
 }
 
+function readNMTConfig(): NMTProviderConfig {
+  const raw = process.env["NMT_PROVIDER"];
+  const provider = raw === "baidu" ? "baidu" : "placeholder";
+
+  if (provider === "baidu") {
+    return {
+      provider: "baidu",
+      appId: readEnv("BAIDU_APP_ID", ""),
+      apiKey: readEnv("BAIDU_API_KEY", ""),
+    };
+  }
+
+  return {
+    provider: "placeholder",
+    appId: "",
+    apiKey: "",
+  };
+}
+
 export const config: AppConfig = {
   asr: readAsrConfig(),
+  nmt: readNMTConfig(),
   translation: readTranslationConfig(),
   server: { port: parsePort(readEnv("SERVER_PORT", "3001")) },
 };
