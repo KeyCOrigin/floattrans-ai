@@ -3,7 +3,7 @@
 //
 // v5 修复：
 //   - SYSTEM_PROMPT 格式说明与实际 markdown 一致（**[N] EN:**）
-//   - 设置 max_tokens=8192，防止长文档输出被截断
+//   - 设置 max_tokens=4096000，确保长文档输出不被 API 截断
 //   - 检测 finish_reason，截断时记录警告
 
 import type { ICorrectionService } from "../domain/ICorrectionService.port";
@@ -12,7 +12,7 @@ import { TranslationError } from "../../../../../shared/errors/AppError";
 const SYSTEM_PROMPT = `你是一个专业同声传译校对员。以下是实时转写和翻译的对话记录。
 
 文档格式说明：
-- 每一行以 **[行号] EN:** 开头的是英文原文（行尾有两个空格表示硬换行）
+- 每一行以 **[行号] EN:** 开头的是英文原文
 - 每一行以 **[行号] ZH:** 开头的是中文译文（[已修复] 标记表示之前已被修正过）
 - EN 和 ZH 成对出现，中间有空行分隔
 
@@ -34,19 +34,15 @@ const SYSTEM_PROMPT = `你是一个专业同声传译校对员。以下是实时
 - 如果所有翻译都正确且无需合并，直接返回原文。`;
 
 interface CorrectionConfig {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly model: string;
 }
 
 export class LLMCorrectionService implements ICorrectionService {
   constructor(private readonly config: CorrectionConfig) {}
 
   async reviewFullDocument(markdown: string): Promise<string> {
-    process.stderr.write(
-      `[LLMCorrection] sending ${markdown.length} chars (≈${Math.round(markdown.length / 4)} tokens)\n`,
-    );
-
     const response = await fetch(this.config.baseUrl, {
       method: "POST",
       headers: {
@@ -78,23 +74,19 @@ export class LLMCorrectionService implements ICorrectionService {
         : null;
 
     if (!choices) {
-      process.stderr.write("[LLMCorrection] no choices in response, returning original\n");
-      return markdown;
+      throw new TranslationError(
+        "LLM Correction: API returned no choices",
+      );
     }
 
-    const content = choices[0]?.message?.content ?? markdown;
-    const finishReason = choices[0]?.finish_reason ?? "unknown";
+    const choice = choices[0]!;
+    const content = choice.message?.content ?? markdown;
+    const finishReason = choice.finish_reason ?? "unknown";
 
-    process.stderr.write(
-      `[LLMCorrection] response ${String(content).length} chars, ` +
-      `finish_reason=${finishReason}, ` +
-      `usage=${JSON.stringify(data?.usage)}\n`,
-    );
-
-    // 截断警告：输出可能不完整，diff 只能比对已有部分
     if (finishReason === "length") {
       process.stderr.write(
         `[LLMCorrection] ⚠️  output truncated! ` +
+        `response ${String(content).length} chars. ` +
         `Consider increasing max_tokens or reducing document size.\n`,
       );
     }
