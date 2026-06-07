@@ -250,6 +250,28 @@ export class LiveDocument {
     return parts.join("\n").trim();
   }
 
+  /**
+   * 导出为不含隐藏行的干净 markdown（供 LLM 修正使用）。
+   * 与 toMarkdown() 的区别：跳过 hidden 行，不输出任何 HTML 注释。
+   */
+  toVisibleMarkdown(): string {
+    const parts: string[] = [];
+    let displayIndex = 0;
+    for (const id of this.#order) {
+      const line = this.#linesById.get(id);
+      if (!line || line.hidden) continue;
+      displayIndex++;
+      let zhText: string = line.chinese ?? "*(翻译中...)*";
+      if (line.status === "corrected" && zhText) {
+        zhText += "[已修复]";
+      }
+      parts.push(`**[${displayIndex}] EN:** ${line.english}  `);
+      parts.push(`**[${displayIndex}] ZH:** ${zhText}`);
+      parts.push("");
+    }
+    return parts.join("\n").trim();
+  }
+
   // ── 快照导出 ──
 
   /** 导出完整快照（用于持久化） */
