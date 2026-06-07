@@ -297,7 +297,13 @@ export class AudioPipeline {
 
       const parsedLines = this.diffEngine.parse(correctedText);
 
-      // ── Phase 2: 检测 LLM 是否合并了行 ──
+      // ── 1. LLM 中文修正 diff（先 diff，因为 merge 后会隐藏行导致索引错位）──
+      const diffs = this.diffEngine.diff(doc.lines, parsedLines);
+      if (diffs.length > 0) {
+        doc.applyRefineResult(diffs);
+      }
+
+      // ── 2. Phase 2: 检测 LLM 是否合并了行（diff 之后再 merge）──
       const merges = this.diffEngine.detectMerges(doc.lines, parsedLines);
       for (const m of merges) {
         // 隐藏被合并的行（保留代表行可见）
@@ -316,15 +322,8 @@ export class AudioPipeline {
         );
       }
 
-      // ── LLM 中文修正 diff ──
-      const diffs = this.diffEngine.diff(doc.lines, parsedLines);
-
-      if (diffs.length > 0) {
-        doc.applyRefineResult(diffs);
-      }
-
-      // 有变更（合并或修正）→ 存盘 + 推送
-      if (merges.length > 0 || diffs.length > 0) {
+      // 有变更（修正或合并）→ 存盘 + 推送
+      if (diffs.length > 0 || merges.length > 0) {
         this.repository.save(doc);
         output.sendContent(doc.toMarkdown(), doc.version);
 

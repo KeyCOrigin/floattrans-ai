@@ -220,7 +220,24 @@ export class LiveDocument {
     let displayIndex = 0;
     for (const id of this.#order) {
       const line = this.#linesById.get(id);
-      if (!line || line.hidden) continue;
+      if (!line) continue;
+
+      if (line.hidden) {
+        // Phase 2：隐藏行以 HTML 注释保留在 .md 文件中
+        const zhPart = line.chinese ?? "*(翻译中...)*";
+        const mergeNote = line.mergedInto
+          ? ` → merged into ${line.mergedInto.slice(0, 8)}`
+          : "";
+        parts.push(
+          `<!-- merged${mergeNote}: EN: ${line.english} -->`,
+        );
+        if (line.chinese) {
+          parts.push(`<!--                ZH: ${zhPart} -->`);
+        }
+        parts.push("");
+        continue;
+      }
+
       displayIndex++;
       let zhText: string = line.chinese ?? "*(翻译中...)*";
       if (line.status === "corrected" && zhText) {

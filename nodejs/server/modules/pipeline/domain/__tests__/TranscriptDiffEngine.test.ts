@@ -198,7 +198,6 @@ describe("TranscriptDiffEngine Phase 2", () => {
   });
 
   it("detectMerges 末尾有未匹配行时不崩溃", () => {
-    // LLM 返回行数超少（只匹配了前2行）
     const l1 = LiveLine.create("A");
     const l2 = LiveLine.create("B");
     const l3 = LiveLine.create("C");
@@ -212,7 +211,46 @@ describe("TranscriptDiffEngine Phase 2", () => {
 [2] ZH: 乙`);
 
     const merges = engine.detectMerges(originals, parsed);
-    // 只匹配了前2行，3,4未匹配 → 无合并（因为没有第3个匹配点）
     expect(merges).toHaveLength(0);
+  });
+
+  it("detectMerges 规范化匹配（额外空格+标点差异）", () => {
+    // LLM 返回的英文可能有额外空格或标点微调
+    const l1 = LiveLine.create("Hello world");
+    const l2 = LiveLine.create("Hello world extended version");
+    const l3 = LiveLine.create("Another sentence");
+    const originals = [l1, l2, l3];
+
+    // LLM 返回时把 l1 和 l2 的英文合并（l2 是最完整版），但加了额外空格
+    const parsed = engine.parse(`[1] EN: Hello world extended version
+[1] ZH: 你好世界扩展版
+
+[2] EN: Another sentence
+[2] ZH: 另一个句子`);
+
+    const merges = engine.detectMerges(originals, parsed);
+    expect(merges).toHaveLength(1);
+    expect(merges[0]!.representativeLineId).toBe(l2.id);
+    expect(merges[0]!.mergedLineIds).toEqual([l1.id]);
+  });
+
+  it("detectMerges 前缀匹配（原英文是parsed英文的前缀）", () => {
+    // ASR: "I hear birds" → LLM 可能轻微修改为 "I hear birds chirping"
+    const l1 = LiveLine.create("Cuz the air is fresh");
+    const l2 = LiveLine.create("Cuz the air is fresher here with all the plants");
+    const l3 = LiveLine.create("Next topic");
+    const originals = [l1, l2, l3];
+
+    // LLM 返回的文本可能微调了标点
+    const parsed = engine.parse(`[1] EN: Cuz the air is fresher here with all the plants
+[1] ZH: 因为这里到处都是植物，空气更清新
+
+[2] EN: Next topic
+[2] ZH: 下一个话题`);
+
+    const merges = engine.detectMerges(originals, parsed);
+    expect(merges).toHaveLength(1);
+    expect(merges[0]!.representativeLineId).toBe(l2.id);
+    expect(merges[0]!.mergedLineIds).toEqual([l1.id]);
   });
 });

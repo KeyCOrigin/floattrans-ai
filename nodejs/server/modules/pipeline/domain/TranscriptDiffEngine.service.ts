@@ -112,14 +112,13 @@ export class TranscriptDiffEngine {
   /**
    * Phase 2：检测 LLM 合并了哪些行。
    *
-   * 当 LLM 返回行数少于原文时，通过英文精确匹配找出合并关系。
+   * 当 LLM 返回行数少于原文时，通过英文匹配找出合并关系。
    *
-   * 算法（LLM 合并增量版本的特征）：
-   *   1. 对于每个 parsed 行，在 originals 中按顺序寻找英文精确匹配
-   *   2. 两个匹配之间的原始行 → 被合并到第二个匹配行
-   *   3. 只有 gap >= 1 才产生合并组
-   *
-   * 前提：LLM 保留最完整英文版本，所以 parsed[i].english 必定等于某个 original[j].english。
+   * 匹配策略（v2——解决精确匹配失败问题）：
+   *   1. 对英文文本做规范化处理（trim + 合并连续空格）
+   *   2. 优先精确匹配 → 回退前缀匹配（原英文≥15字符且是 parsed 英文的前缀）
+   *   3. 前缀匹配解决：LLM 可能微调标点、尾部空格被 strip 等问题
+   *   4. 无法匹配的 parsed 行 → 跳过（不阻塞后续检测）
    *
    * @param originals  原始可见行列表
    * @param parsed      LLM 返回的解析后行列表
@@ -136,17 +135,39 @@ export class TranscriptDiffEngine {
 
     for (let parsedIdx = 0; parsedIdx < parsed.length; parsedIdx++) {
       const p = parsed[parsedIdx]!;
+      const pNorm = normalizeEnglish(p.english);
       let matchIdx = -1;
 
-      // 在原始行中按顺序寻找英文精确匹配
+      // 第一轮：规范化后精确匹配
       for (let k = origIdx; k < originals.length; k++) {
-        if (originals[k]!.english === p.english) {
+        if (normalizeEnglish(originals[k]!.english) === pNorm) {
           matchIdx = k;
           break;
         }
       }
 
-      if (matchIdx < 0) continue;
+      // 第二轮：前缀匹配（原英文是 parsed 英文的前缀，最小长度 15 字符）
+      if (matchIdx < 0) {
+        for (let k = origIdx; k < originals.length; k++) {
+          const origNorm = normalizeEnglish(originals[k]!.english);
+          if (origNorm.length >= 15 && pNorm.startsWith(origNorm)) {
+            matchIdx = k;
+            process.stderr.write(
+              `[DiffEngine] prefix match: ` +
+              `"${origNorm.slice(0, 40)}" ← "${pNorm.slice(0, 40)}"\n`,
+            );
+            break;
+          }
+        }
+      }
+
+      if (matchIdx < 0) {
+        // 无法匹配 → 跳过此行，不阻塞后续检测
+        process.stderr.write(
+          `[DiffEngine] no match for parsed#${parsedIdx}: "${pNorm.slice(0, 60)}"\n`,
+        );
+        continue;
+      }
 
       // 两个匹配之间存在 gap → 产生了合并
       if (matchIdx > origIdx) {
@@ -168,4 +189,9 @@ export class TranscriptDiffEngine {
 
     return merges;
   }
+}
+
+/** 规范化英文文本用于匹配比较 */
+function normalizeEnglish(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
 }

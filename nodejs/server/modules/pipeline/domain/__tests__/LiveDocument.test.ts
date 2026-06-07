@@ -243,9 +243,14 @@ describe("LiveDocument Phase 2", () => {
     doc.hideLine(r2!.lineId, "mg_test");
 
     const md = doc.toMarkdown();
-    // 显示序号重编号：A→[1], C→[2]
+    // 可见行重编号：A→[1], C→[2]
     expect(md).toContain("**[1] EN:** A");
     expect(md).toContain("**[2] EN:** C");
-    expect(md).not.toContain("B");
+    // 隐藏行以 HTML 注释保留
+    expect(md).toContain("<!-- merged");
+    expect(md).toContain("EN: B");
+    // 渲染后的 EN 行中不包含 B（B 只在注释中）
+    const visibleLines = md.split("\n").filter((l) => !l.startsWith("<!--"));
+    expect(visibleLines.join("\n")).not.toContain("EN:** B");
   });
 });
