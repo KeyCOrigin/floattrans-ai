@@ -2,6 +2,7 @@
 // 唯一 new 具体实现类的地方
 
 import { AudioPipeline } from "./modules/pipeline/domain/AudioPipeline.service";
+import { MergeGroupManager } from "./modules/pipeline/domain/MergeGroupManager.service";
 import { AzureASRService } from "./modules/pipeline/infrastructure/AzureASRService";
 import { IFlytekASRService } from "./modules/pipeline/infrastructure/IFlytekASRService";
 import { BaiduNMTService } from "./modules/pipeline/infrastructure/BaiduNMTService";
@@ -56,12 +57,16 @@ export function compose(): Dependencies {
   // 文档持久化
   const repository = new MarkdownFileRepository();
 
+  // 合并组管理器（Phase 2：LLM 合并不删行）
+  const mergeGroupManager = new MergeGroupManager();
+
   // 文档流管道（不再需要 Normalizer / Debounce / SegmentManager / Gate）
   const pipeline = new AudioPipeline(
     asrService,
     nmtService,
     correctionService,
     repository,
+    mergeGroupManager,
   );
 
   const sessionRepo = new InMemorySessionRepository();

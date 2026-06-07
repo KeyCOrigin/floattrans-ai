@@ -8,7 +8,7 @@
 
 import crypto from "node:crypto";
 import dns from "node:dns";
-import type { INMTService } from "../domain/INMTService.port";
+import type { INMTService, NmtTranslateContext } from "../domain/INMTService.port";
 import { TranslationError } from "../../../../../shared/errors/AppError";
 
 // 强制 IPv4 DNS 解析，避免 Windows 环境默认 IPv6 导致百度 API IP 白名单不匹配
@@ -31,7 +31,8 @@ export class BaiduNMTService implements INMTService {
     private readonly secretKey: string,
   ) {}
 
-  async translate(text: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async translate(text: string, _ctx?: NmtTranslateContext): Promise<string> {
     // 未配置凭据时抛出明确错误，优于调用远端后返回签名错误
     if (!this.appId || !this.secretKey) {
       throw new TranslationError(

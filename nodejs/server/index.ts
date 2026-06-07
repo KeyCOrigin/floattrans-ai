@@ -15,7 +15,8 @@ const wss = new WebSocketServer({ port });
 process.stderr.write(`[FloatTrans Server] composing dependencies...\n`);
 const deps = compose();
 process.stderr.write(`[FloatTrans Server] ASR provider: ${config.asr.provider}\n`);
-process.stderr.write(`[FloatTrans Server] Translation provider: ${config.translation.model}\n`);
+process.stderr.write(`[FloatTrans Server] Realtime NMT provider: ${config.nmt.provider}\n`);
+process.stderr.write(`[FloatTrans Server] Refine provider: ${config.translation.model}\n`);
 
 wss.on("connection", (ws) => {
   const handler = createWSHandler(ws, {
