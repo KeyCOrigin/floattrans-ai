@@ -1,76 +1,90 @@
 # FloatTrans AI — Electron 前端
 
-> 项目概述、核心功能和完整结构请见[根 README](../README.md)。
+> 完整项目概述、架构设计详见[根 README](../README.md)。
 
 ---
 
-## 快速开始（前端）
+## 快速开始
 
 ```bash
-# 在此目录下安装前端依赖
+# 安装依赖
 npm install
 
-# 终端一：启动 Vite 开发服务器
-npm run dev
+# 终端一：Vite 开发服务器
+npm run dev                  # → http://localhost:5173
 
 # 终端二：编译 Electron 主进程 + 启动桌面应用
 npm run electron:dev
+
+# 同时启动 Vite + Electron（一键方案）
+npm run dev:all
 ```
+
+> 实时同传模式需要先启动后端：在项目根执行 `npm run dev:backend`。
 
 ---
 
-## Electron 架构
+## 窗口架构
 
 ### 双窗口设计
 
-| 窗口 | 文件 | 特征 |
+| 窗口 | 入口 | 组件 | 特征 |
+|------|------|------|------|
+| 控制面板 | `index.html` → `main.tsx` | `ControlPanel.tsx` | 380×560，不可缩放，设备选择/启停/样式调节 |
+| 文档窗口 | `overlay.html` → `overlay.tsx` | `TranscriptOverlay.tsx` | 500×700，可缩放拖拽，Markdown 实时渲染 + 自动滚底 |
+
+### IPC 通道
+
+控制面板通过 Electron 主进程（`main.ts`）将 Markdown 内容和样式设置转发到文档窗口：
+
+```
+ControlPanel ──IPC──▶ main.ts ──webContents.send──▶ TranscriptOverlay
+```
+
+| 通道 | 方向 | 说明 |
 |------|------|------|
-| 控制窗口 | `main.ts` → `ControlPanel.tsx` | 380×560, 常规窗口 |
-| 悬浮字幕窗口 | `main.ts` → `OverlaySubtitle.tsx` | 1200×180, transparent, alwaysOnTop, frame:false, skipTaskbar, focusable:false |
-
-IPC 通道：`subtitle:update`（控制窗口 → 主进程 → 悬浮窗口）
-
-### 前端清洁架构
-
-```
-electron/src/
-├── compose.ts                          # 组合根（唯一 new 点）
-├── engine/
-│   └── SubtitleEngine.ts               # 纯逻辑核心（零框架依赖）
-├── components/
-│   ├── ControlPanel.tsx                # 演示/实时双模式控制
-│   ├── OverlaySubtitle.tsx             # 悬浮字幕渲染
-│   └── CorrectionLog.tsx               # 修正记录条目
-├── modules/
-│   ├── audio/
-│   │   ├── domain/IAudioCaptureService.ts    # 音频采集端口
-│   │   └── infrastructure/SystemAudioCapture.ts  # 系统音频实现
-│   ├── session/
-│   │   ├── domain/Session.entity.ts          # 会话实体（状态机）
-│   │   ├── domain/IWebSocketClient.port.ts   # WebSocket 端口
-│   │   ├── application/StartSessionUseCase.ts # 启动会话用例
-│   │   └── infrastructure/WebSocketClient.ts # WebSocket 实现
-│   └── subtitle/
-│       ├── domain/                           # 字幕数据源接口
-│       └── application/ProcessSubtitleUseCase.ts
-├── data/
-│   ├── demoSegments.ts                 # 预置字幕时间轴
-│   └── demoCorrections.ts              # 预置修正事件
-└── types/
-    └── subtitle.ts                     # 字幕类型 SSOT
-```
+| `viewer:open` / `viewer:close` | CP → main | 打开/关闭文档窗口 |
+| `document:content` | CP → main → DO | 推送 Markdown（含版本号） |
+| `document:clear` | CP → main → DO | 清空文档 |
+| `overlay:applyStyle` | CP → main → DO | 透明度/字号/颜色 |
 
 ---
 
-## SubtitleEngine 核心设计
+## 清洁架构
 
-纯 TypeScript 类，不依赖 React、Electron 或任何浏览器 API。通过 `tick(deltaSeconds)` 驱动时间轴推进，`start(onTick)` 注册回调接收每一帧的字幕和修正事件。
-
-关键能力：
-- 时间轴驱动字幕切换（`#findCurrentSegment()`）
-- 上下文修正自动触发（`#applyDueCorrections()`，根据 `triggerAt` + `applied` 标志）
-- 二次播放完整恢复（`stop()` 通过 `#originalSegments` 还原被修正的文本）
-- 可注入 ID 生成器（测试可控）
+```
+electron/src/
+├── compose.ts                            # 组合根（唯一 new 的地方）
+├── main.tsx                              # React 入口 — 控制面板
+├── overlay.tsx                           # React 入口 — 文档窗口
+├── components/
+│   ├── ControlPanel.tsx                  # 设备选择 / 启停 / 样式
+│   └── TranscriptOverlay.tsx             # Markdown 渲染 + 自动滚底
+├── modules/
+│   ├── audio/
+│   │   ├── domain/
+│   │   │   ├── IAudioCaptureService.ts   # 音频采集接口
+│   │   │   ├── AudioChunk.value-object.ts
+│   │   │   └── AudioDevice.value-object.ts
+│   │   └── infrastructure/
+│   │       └── BrowserAudioCapture.ts    # Web Audio API 实现
+│   └── session/
+│       ├── domain/
+│       │   ├── Session.entity.ts         # 会话实体（状态机）
+│       │   ├── SessionState.value-object.ts
+│       │   ├── IWebSocketClient.port.ts  # WebSocket 接口
+│       │   └── __tests__/Session.test.ts
+│       ├── application/
+│       │   └── StartSessionUseCase.ts    # 启动/停止会话
+│       └── infrastructure/
+│           └── WebSocketClient.ts        # 指数退避重连实现
+├── styles/
+│   ├── control.css
+│   └── overlay.css
+└── types/
+    ├── overlay.ts                         # IPC 样式载荷
+    └── subtitle.ts                        # WebSocket 消息类型
+```
 
 ---
 
@@ -78,9 +92,10 @@ electron/src/
 
 | 层 | 选型 |
 |----|------|
-| 桌面框架 | Electron |
-| UI | React 18 + TypeScript (strict) |
-| 构建 | Vite |
-| 样式 | CSS（无框架依赖） |
-| 测试 | Vitest |
-| 音频采集 | Web Audio API (ScriptProcessorNode) |
+| 桌面框架 | Electron 41 |
+| UI | React 19 + TypeScript 5.8 (strict) |
+| Markdown 渲染 | react-markdown 10 + remark-gfm 4 |
+| 构建 | Vite 6 |
+| WebSocket | 原生 WebSocket（指数退避自动重连） |
+| 音频采集 | Web Audio API (getUserMedia → MediaStream) |
+| 测试 | Vitest 3 |
