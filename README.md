@@ -1,5 +1,7 @@
 # FloatTrans AI
 
+> [🎬 B站演示视频](https://www.bilibili.com/video/BV1c8Et6wE3g/?spm_id_from=333.1387.homepage.video_card.click&vd_source=8e5a46830e8a11530b79d433a3ba9309)
+
 > 极简桌面实时同声传译文档助手 — 系统音频采集 → 语音识别 → 快速翻译 → LLM 智能修正
 
 FloatTrans AI 由两个 Electron 窗口组成：**控制面板**（启停、设备选择、样式调节）和**实时文档窗口**（Markdown 双语字幕）。用户观看会议、网课或技术分享时，实时同传文档在独立窗口中流式更新，不遮挡主内容。
@@ -305,10 +307,3 @@ cd electron && npx tsc --noEmit
 
 ---
 
-## 答译文案
-
-> FloatTrans AI 是一个极简桌面实时同声传译文档助手。我们设计成控制面板 + 独立文档窗口的双窗口架构——用户用控制面板启停监听、调节样式，同传文档在可自由缩放拖拽的独立窗口中流式更新，不干扰主屏幕内容。
->
-> 后端管道采用清洁架构：ASR 语音识别 → LiveDocument 稳定身份聚合根 → NMT 逐句翻译（含陈旧守卫和 NmtScheduler 调度器）→ LLM 全文智能修正。LiveLine 的 UUID 稳定身份解决了实时转写中增量修正的身份漂移问题；MergeGroup 合并去重在不删除原始行的前提下隐藏增量版本。
->
-> v2.0 完整重写为前后端分离架构：前端 Electron + React 19 + Vite 6，后端 Node.js + WebSocket + tsx，支持 Azure/讯飞 ASR、百度翻译 NMT、6 家 LLM 供应商一键切换。
