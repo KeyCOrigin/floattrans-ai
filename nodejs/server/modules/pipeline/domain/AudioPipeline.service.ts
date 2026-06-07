@@ -9,10 +9,10 @@
 import type { IASRService } from "./IASRService.port";
 import type { INMTService } from "./INMTService.port";
 import type { ICorrectionService } from "./ICorrectionService.port";
-import type { ITranslationGate } from "./ITranslationGate.port";
+import { type ITranslationGate, GATE_RETRY_DELAY_MS, GATE_MAX_POOL_SIZE } from "./ITranslationGate.port";
 import type { ASRResult } from "./ASRResult.value-object";
 import type { Session } from "../../session/domain/Session.entity";
-import type { PipelineOutputPort, DanmakuEntrySnapshot } from "./PipelineOutputPort.port";
+import type { PipelineOutputPort } from "./PipelineOutputPort.port";
 import type { ISpeechTextNormalizer } from "./ISpeechTextNormalizer.port";
 import type { IAdaptiveDebounceStrategy } from "./IAdaptiveDebounceStrategy.port";
 import type { SpeechMetrics } from "./SpeechMetrics.value-object";
@@ -25,8 +25,6 @@ import { TranslationError } from "../../../../../shared/errors/AppError";
 const PARTIAL_TRANSLATION_CONFIDENCE = 0.85;
 /** 语速计算滑窗大小 */
 const SPEECH_RATE_WINDOW = 3;
-/** 弹幕池最大条目数 */
-const MAX_DANMAKU_ENTRIES = 10;
 /** 修正请求的历史上下文条数 */
 const CORRECTION_CONTEXT_SIZE = 5;
 
@@ -107,7 +105,8 @@ export class AudioPipeline {
 
   setCallbacks(
     onSegment: PipelineCallback,
-    onPartial: PartialCallback,
+    /** 保留参数：如需恢复 subtitle:partial 实时字幕可重新启用调用 */
+    _onPartial: PartialCallback,
     onError: ErrorCallback,
   ): void {
     // ── Partial 路径 ──
@@ -116,10 +115,10 @@ export class AudioPipeline {
       const state = this.segmentManager.acceptPartial(norm.normalized);
       this.#activeSegment = state;
 
-      // 实时显示 partial 文本
-      onPartial(state.text, Date.now());
+      // 不再发送 subtitle:partial（逐词显示会干扰同声传译体验）。
+      // 弹幕 draft 推送已提供当前 utterance 的可视反馈，无需额外的逐词字幕层。
 
-      // 新 utterance → 推入弹幕条目（draft 状态，等待 NMT 填充中文）
+      // 新 utterance → 推入弹幕条目（draft 状态，仅英文，等待 final 时 NMT 填充中文）
       if (state.isNewUtterance) {
         this.#output?.sendDanmakuPush({
           id: state.segmentId,
@@ -130,14 +129,14 @@ export class AudioPipeline {
         });
         this.#danmakuIds.push(state.segmentId);
         // 弹幕池溢出 → evict 最旧条目（FIFO）
-        while (this.#danmakuIds.length > MAX_DANMAKU_ENTRIES) {
+        while (this.#danmakuIds.length > GATE_MAX_POOL_SIZE) {
           const evictId = this.#danmakuIds.shift();
           if (evictId) this.#output?.sendDanmakuEvict(evictId);
         }
       }
 
       this.#scheduleTranslation(state, onError);
-      this.#recordSpeechSample(rawText.length);
+      // speech sample 由 #computeSpeechMetrics 统一记录，避免重复
     });
 
     // ── Final 路径 ──
@@ -210,7 +209,16 @@ export class AudioPipeline {
     });
   }
 
-  /** 自适应防抖 + NMT 翻译调度（partial 路径：经 gate 判断后可能跳过 NMT） */
+  /**
+   * 自适应防抖 + 稳定门控 NMT 翻译调度。
+   *
+   * 两层决策：
+   *   1. ITranslationGate — 判断文本是否「稳定」（final / 标点 / 停顿 / 池满）
+   *   2. AdaptiveDebounceEngine — 判断是否有足够增量值得再译
+   *
+   * 门控拒绝时启动 GATE_RETRY_DELAY_MS 定时器；若新 partial 到达则重置，
+   * 实现「无新 partial 达 800ms → 文本稳定 → 翻译」的稳定检测。
+   */
   #scheduleTranslation(
     state: SegmentState,
     onError: ErrorCallback,
@@ -218,13 +226,33 @@ export class AudioPipeline {
     this.#currentPartialText = state.text;
     if (!state.isNewUtterance && state.text === this.#lastTranslatedText) return;
 
-    // 门控检查：非 final 阶段不触发 NMT，避免逐词翻译闪烁
+    // 清除已有定时器（新 partial 到达 → 重新评估稳定窗口）
+    if (this.#debounceTimer) {
+      clearTimeout(this.#debounceTimer);
+      this.#debounceTimer = null;
+    }
+
     const metrics = this.#computeSpeechMetrics(state.text);
-    if (!this.translationGate.shouldTranslate(state, metrics)) return;
 
-    if (this.#debounceTimer) clearTimeout(this.#debounceTimer);
+    // 第一层：门控检查 —— 文本是否足够稳定可以翻译？
+    if (!this.translationGate.shouldTranslate(state, metrics)) {
+      // 文本仍在快速变化 → 启动稳定重试定时器
+      // 若 800ms 内无新 partial，定时器触发翻译当前累积文本
+      if (!this.#isTranslating) {
+        this.#debounceTimer = setTimeout(() => {
+          this.#debounceTimer = null;
+          const activeId = this.#activeSegment?.segmentId;
+          if (activeId && this.#currentPartialText) {
+            this.#executeNMTTranslation(activeId, this.#currentPartialText, onError);
+          }
+        }, GATE_RETRY_DELAY_MS);
+      }
+      return;
+    }
 
+    // 门控通过 —— 第二层：防抖引擎决定翻译时机
     if (this.#isTranslating) {
+      // 正在翻译中 → 排队等待
       this.#debounceTimer = setTimeout(() => {
         this.#debounceTimer = null;
         this.#executeNMTTranslation(state.segmentId, this.#currentPartialText, onError);
@@ -281,19 +309,33 @@ export class AudioPipeline {
     } finally {
       this.#isTranslating = false;
       // 检视是否有新的 partial 在等待 → 链式触发翻译（有深度上限）
+      // 必须通过 gate 检查，防止绕过稳定性判断导致逐词翻译
       if (
         retryDepth < AudioPipeline.#MAX_TRANSLATION_RETRIES &&
         this.#debounceTimer === null &&
         this.#currentPartialText !== text
       ) {
         const activeId = this.#activeSegment?.segmentId;
-        if (activeId) {
-          await this.#executeNMTTranslation(
-            activeId,
-            this.#currentPartialText,
-            onError,
-            retryDepth + 1,
-          );
+        const gateState = this.#activeSegment;
+        if (activeId && gateState) {
+          const newMetrics = this.#computeSpeechMetrics(this.#currentPartialText);
+          if (this.translationGate.shouldTranslate(gateState, newMetrics)) {
+            await this.#executeNMTTranslation(
+              activeId,
+              this.#currentPartialText,
+              onError,
+              retryDepth + 1,
+            );
+          } else {
+            // Gate 拒绝 → 延迟重试而非直接翻译
+            this.#debounceTimer = setTimeout(() => {
+              this.#debounceTimer = null;
+              const id = this.#activeSegment?.segmentId;
+              if (id) {
+                this.#executeNMTTranslation(id, this.#currentPartialText, onError, retryDepth + 1);
+              }
+            }, GATE_RETRY_DELAY_MS);
+          }
         }
       }
     }

@@ -11,7 +11,7 @@ import type { IPartialSegmentManager } from "./IPartialSegmentManager.port";
 import type { SegmentState } from "./SegmentState.value-object";
 
 /** 编辑距离超过此比例视为新 utterance */
-const REPLACE_THRESHOLD = 0.3;
+const REPLACE_THRESHOLD = 0.5;
 
 export class PartialSegmentManager implements IPartialSegmentManager {
   #segmentId: string | null = null;

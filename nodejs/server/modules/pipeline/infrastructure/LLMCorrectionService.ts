@@ -75,11 +75,10 @@ export class LLMCorrectionService implements ICorrectionService {
     }
 
     const data: unknown = await response.json();
+    const obj = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : null;
     const content =
-      typeof data === "object" && data !== null &&
-      "choices" in data &&
-      Array.isArray((data as Record<string, unknown>).choices)
-        ? ((data as Record<string, unknown>).choices as Array<{ message?: { content?: string } }>)[0]?.message?.content ?? "{}"
+      obj !== null && "choices" in obj && Array.isArray(obj.choices)
+        ? (obj.choices as Array<{ message?: { content?: string } }>)[0]?.message?.content ?? "{}"
         : "{}";
 
     return this.#parseCorrections(content, req.currentSegmentId);

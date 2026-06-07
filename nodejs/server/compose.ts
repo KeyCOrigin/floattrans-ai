@@ -7,7 +7,7 @@ import { ContextCorrectionEngine } from "./modules/pipeline/domain/ContextCorrec
 import { SpeechTextNormalizer } from "./modules/pipeline/domain/SpeechTextNormalizer.service";
 import { AdaptiveDebounceEngine } from "./modules/pipeline/domain/AdaptiveDebounceEngine.service";
 import { PartialSegmentManager } from "./modules/pipeline/domain/PartialSegmentManager.service";
-import { FinalOnlyTranslationGate } from "./modules/pipeline/infrastructure/FinalOnlyTranslationGate";
+import { StablePauseTranslationGate } from "./modules/pipeline/infrastructure/StablePauseTranslationGate";
 import { AzureASRService } from "./modules/pipeline/infrastructure/AzureASRService";
 import { IFlytekASRService } from "./modules/pipeline/infrastructure/IFlytekASRService";
 import { BaiduNMTService } from "./modules/pipeline/infrastructure/BaiduNMTService";
@@ -65,8 +65,8 @@ export function compose(): Dependencies {
   const debounceEngine = new AdaptiveDebounceEngine();
   const segmentManager = new PartialSegmentManager();
 
-  // 翻译门控：默认仅在 ASR final 时触发 NMT，避免 partial 逐词翻译闪烁
-  const translationGate: ITranslationGate = new FinalOnlyTranslationGate();
+  // 翻译门控：基于文本稳定性（final / 标点 / 停顿 / 池满）触发 NMT
+  const translationGate: ITranslationGate = new StablePauseTranslationGate();
 
   // 双路径音频管道：NMT 首发 + LLM 异步修正 + Partial 聚合 + 翻译门控
   const pipeline = new AudioPipeline(

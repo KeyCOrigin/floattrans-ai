@@ -164,7 +164,6 @@ describe("AudioPipeline — Partial 聚合集成测试", () => {
   let nmt: ReturnType<typeof makeMockNMT>;
   let rec: ReturnType<typeof makeRecordingOutput>;
   let onSegmentCalls: Array<{ segmentId: string; english: string; chinese: string }>;
-  let onPartialCalls: string[];
 
   beforeEach(async () => {
     const p = makePipeline();
@@ -174,14 +173,13 @@ describe("AudioPipeline — Partial 聚合集成测试", () => {
     rec = p.rec;
 
     onSegmentCalls = [];
-    onPartialCalls = [];
 
     const session = makeSession();
     await pipeline.start(session, rec.output);
 
     pipeline.setCallbacks(
       (seg) => { onSegmentCalls.push(seg); },
-      (text) => { onPartialCalls.push(text); },
+      () => { /* partial 不再外发 subtitle:partial，弹幕 draft 已提供可视反馈 */ },
       (err) => { throw err; },
     );
   });
@@ -406,6 +404,109 @@ describe("AudioPipeline — Partial 聚合集成测试", () => {
       const finalUpdate = rec2.updates.find((u) => u.isComplete);
       expect(finalUpdate).toBeTruthy();
       expect(finalUpdate!.chinese).toBe("[译]Hello world today");
+    });
+  });
+
+  // ================================================================
+  // 稳定停顿门控：800ms 无新 partial → 自动翻译
+  // ================================================================
+  describe("StablePauseTranslationGate 稳定停顿触发翻译", () => {
+    it("连续 partial 后停顿 800ms → NMT 自动触发", async () => {
+      vi.useFakeTimers();
+
+      const asr2 = makeMockASR();
+      const nmt2 = makeMockNMT();
+      const rec2 = makeRecordingOutput();
+      const segmentMgr2 = new PartialSegmentManager();
+
+      // 使用真实 StablePauseTranslationGate（仅 final + 标点 + 停顿 + 池满 允许翻译）
+      const { StablePauseTranslationGate } = await import(
+        "../../infrastructure/StablePauseTranslationGate"
+      );
+      const gate = new StablePauseTranslationGate();
+
+      const pipeline2 = new AudioPipeline(
+        asr2.service,
+        nmt2,
+        makeMockCorrection(),
+        makeMockNormalizer(),
+        makeInstantDebounce(),
+        segmentMgr2,
+        gate,
+      );
+
+      const session = makeSession();
+      await pipeline2.start(session, rec2.output);
+
+      pipeline2.setCallbacks(
+        () => {},
+        () => {},
+        (err) => { throw err; },
+      );
+
+      // 快速发送 3 次 partial（模拟连续说话）
+      asr2.emitPartial("Hello");
+      vi.advanceTimersByTime(100);
+      asr2.emitPartial("Hello world");
+      vi.advanceTimersByTime(100);
+      asr2.emitPartial("Hello world today");
+
+      // 800ms 内：NMT 不应被调用（每次 partial 都重置定时器）
+      vi.advanceTimersByTime(600);
+      expect(nmt2.translate).not.toHaveBeenCalled();
+
+      // 超过 800ms 无新 partial → 稳定定时器触发
+      vi.advanceTimersByTime(300); // 累计 900ms
+
+      // 等待异步 NMT 完成
+      await vi.runAllTimersAsync();
+
+      expect(nmt2.translate).toHaveBeenCalled();
+      // danmaku 获得了中文更新
+      expect(rec2.updates.length).toBeGreaterThan(0);
+
+      vi.useRealTimers();
+    });
+
+    it("标点结尾 → 立即翻译（不等待停顿）", async () => {
+      const asr2 = makeMockASR();
+      const nmt2 = makeMockNMT();
+      const rec2 = makeRecordingOutput();
+      const segmentMgr2 = new PartialSegmentManager();
+
+      const { StablePauseTranslationGate } = await import(
+        "../../infrastructure/StablePauseTranslationGate"
+      );
+      const gate = new StablePauseTranslationGate();
+
+      const pipeline2 = new AudioPipeline(
+        asr2.service,
+        nmt2,
+        makeMockCorrection(),
+        makeMockNormalizer(),
+        makeInstantDebounce(),
+        segmentMgr2,
+        gate,
+      );
+
+      const session = makeSession();
+      await pipeline2.start(session, rec2.output);
+
+      pipeline2.setCallbacks(
+        () => {},
+        () => {},
+        (err) => { throw err; },
+      );
+
+      // 发送以句号结尾的 partial → 标点触发立即翻译
+      asr2.emitPartial("Hello world.");
+
+      // 等异步完成
+      await new Promise((r) => setTimeout(r, 200));
+
+      expect(nmt2.translate).toHaveBeenCalledWith("Hello world.");
+      expect(rec2.updates.length).toBeGreaterThan(0);
+      expect(rec2.updates[0]!.chinese).toBe("[译]Hello world.");
     });
   });
 });
