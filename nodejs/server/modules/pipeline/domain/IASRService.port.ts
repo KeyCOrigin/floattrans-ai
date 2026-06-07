@@ -7,7 +7,8 @@ import type { ASRResult } from "./ASRResult.value-object";
 // 基础设施层实现类统一引用，避免跨文件重复定义
 
 export type ASRFinalCallback = (result: ASRResult) => void;
-export type ASRPartialCallback = (text: string) => void;
+/** partial 结果回调——接收完整 ASRResult（含 words[] 等元数据），不再只是裸字符串 */
+export type ASRPartialCallback = (result: ASRResult) => void;
 export type ASRErrorCallback = (error: Error) => void;
 
 // ===== 配置与接口 =====

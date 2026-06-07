@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.0",
+    "esbuild": "^0.28.0",
     "ws": "^8.16.0"
   },
   "devDependencies": {

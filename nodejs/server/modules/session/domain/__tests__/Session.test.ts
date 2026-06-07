@@ -36,6 +36,7 @@ describe("Session (Server)", () => {
 
   it("addSegment 追加字幕片段", () => {
     const session = Session.create(defaultFormat);
+    session.start();
     session.addSegment({
       id: "seg_001",
       startTime: 0,
@@ -51,6 +52,7 @@ describe("Session (Server)", () => {
 
   it("applyCorrection 修正已存在的 segment", () => {
     const session = Session.create(defaultFormat);
+    session.start();
     session.addSegment({
       id: "seg_001",
       startTime: 0,
@@ -75,6 +77,7 @@ describe("Session (Server)", () => {
 
   it("getContext 返回最近 N 句", () => {
     const session = Session.create(defaultFormat);
+    session.start();
     for (let i = 0; i < 5; i++) {
       session.addSegment({
         id: `seg_${i}`,
@@ -90,6 +93,27 @@ describe("Session (Server)", () => {
     expect(ctx).toHaveLength(3);
     expect(ctx[0]?.en).toBe("Sentence 2");
     expect(ctx[2]?.en).toBe("Sentence 4");
+  });
+
+  it("stop 在 idle 状态下抛出 InvalidStateError", () => {
+    const session = Session.create(defaultFormat);
+    expect(() => session.stop()).toThrow("Cannot 'stop' in state 'idle'");
+  });
+
+  it("addSegment 在 idle 状态下抛出 InvalidStateError", () => {
+    const session = Session.create(defaultFormat);
+    expect(() => session.addSegment({
+      id: "seg_001", startTime: 0, endTime: 1,
+      english: "Hi", chinese: "你好", status: "final", confidence: 0.9,
+    })).toThrow("Cannot 'addSegment' in state 'idle'");
+  });
+
+  it("applyCorrection 在 idle 状态下抛出 InvalidStateError", () => {
+    const session = Session.create(defaultFormat);
+    expect(() => session.applyCorrection({
+      segmentId: "seg_001",
+      oldEnglish: "", newEnglish: "", oldChinese: "", newChinese: "", reason: "",
+    })).toThrow("Cannot 'applyCorrection' in state 'idle'");
   });
 
   it("segments 返回只读数组", () => {

@@ -5,6 +5,8 @@
 // 音频：原始 PCM16 二进制帧（40ms/1280 字节）
 
 import type { IASRService, ASRConfig, ASRFinalCallback, ASRPartialCallback, ASRErrorCallback } from "../domain/IASRService.port";
+import type { ASRResult } from "../domain/ASRResult.value-object";
+import type { EnrichedASRWord, ASRWordType } from "../domain/EnrichedASRWord.value-object";
 import { ASRError } from "../../../../../shared/errors/AppError";
 import { WebSocket as WebSocketImpl } from "ws";
 import crypto from "node:crypto";
@@ -35,6 +37,7 @@ interface IFlytekASRResponseData {
   seg_id?: number;
   cn?: {
     st?: {
+      type?: number;       // 0=deterministic, 1=intermediate
       rt?: Array<{
         ws?: Array<{
           cw?: Array<{ w?: string; wp?: string }>;
@@ -70,6 +73,10 @@ export class IFlytekASRService implements IASRService {
   #audioBuffer: ArrayBuffer[] = [];
   #sessionId = "";
   #pushAudioCount = 0;
+  /** 已通过标点触发 final 的文本，用于去重 */
+  #lastFinalizedText = "";
+  /** 已 finalize 的句子精确文本集合，防止同一句因 ASR 修正被重复提交 */
+  #finalizedSentences = new Set<string>();
 
   constructor(private readonly config: IFlytekConfig) {}
 
@@ -77,6 +84,8 @@ export class IFlytekASRService implements IASRService {
     this.#isRecognizing = true;
     this.#audioBuffer = [];
     this.#sessionId = "";
+    this.#lastFinalizedText = "";
+    this.#finalizedSentences = new Set();
 
     const url = this.#buildSignedUrl(asrConfig);
     process.stderr.write(`[IFlytekASR] connecting to office-api-ast-dx.iflyaisol.com\n`);
@@ -85,6 +94,8 @@ export class IFlytekASRService implements IASRService {
 
     this.#ws.on("open", () => {
       process.stderr.write(`[IFlytekASR] WebSocket connected, waiting for server started...\n`);
+      // 连接建立即通知就绪，前端可看到 asr_connected 状态
+      this.#onReady?.();
     });
 
     this.#ws.on("message", (raw: Buffer) => {
@@ -120,20 +131,95 @@ export class IFlytekASRService implements IASRService {
 
       // 转写结果 (msg_type=result)
       if (msg.msg_type === "result") {
-        const text = this.#extractText(d);
-        if (!text) return;
-        const bg = d?.cn?.bg ?? 0;
-        const ed = d?.cn?.ed ?? 0;
-        // ls 在 data 层级
-        if (d?.ls === true) {
-          process.stderr.write(`[IFlytekASR] final result: "${text}"\n`);
-          this.#onFinal?.({
-            text, isFinal: true, confidence: 0.9,
-            startTime: bg, endTime: ed,
-          });
-        } else {
-          this.#onPartial?.(text);
+        const result = this.#extractResult(d);
+        if (!result.text) return;
+
+        // DEBUG: 跟踪标点检测和 final 触发
+        if (result.hasPunctuation || result.hasSegmentBreak) {
+          process.stderr.write(`[IFlytekASR] detected punct/segment in result, hasPunctuation=${result.hasPunctuation}, hasSegmentBreak=${result.hasSegmentBreak}, text="${result.text.slice(0, 60)}"\n`);
         }
+
+        // API 明确标记为 final (ls:true)
+        if (d?.ls === true) {
+          const lsText = result.text.trim();
+          if (lsText && !this.#finalizedSentences.has(lsText)) {
+            this.#finalizedSentences.add(lsText);
+            this.#lastFinalizedText = lsText;
+            process.stderr.write(`[IFlytekASR] ls-final: "${lsText.slice(0, 80)}"\n`);
+            this.#onFinal?.(result);
+          }
+          return;
+        }
+
+        // 标点触发的句子结束检测（v3: 尾部残句强制 finalize）
+        //
+        // 讯飞 ASR 中间结果常有句中标点（逗号、前导句号）但缺少句尾标点。
+        // 例如 ". When describing things in nature and scenery, there is"
+        // → hasPunctuation=true，但正则 /[^.!?]+[.!?]+/g 找不到以 .?! 结尾的完整句
+        // → v2 会整段丢弃，导致 70%+ 的内容丢失
+        //
+        // v3 修复：正则提取完整句后，尾部残句（移除前导标点）若 ≥3 词，同样强制 finalize。
+        // 修正合并由 pipeline 的 TranscriptDocument.appendFinalEnglish 通过 startsWith 处理。
+        const text = result.text;
+        const hasEndPunct = result.hasPunctuation === true || result.hasSegmentBreak === true;
+
+        if (hasEndPunct) {
+          // 提取所有完整句子（以 .?! 结尾的片段）
+          const sentenceRe = /[^.!?]+[.!?]+/g;
+          let match: RegExpExecArray | null;
+          let lastIndex = 0;
+          let extractedCount = 0;
+          while ((match = sentenceRe.exec(text)) !== null) {
+            lastIndex = match.index + match[0].length;
+            extractedCount++;
+            const sentence = match[0].trim();
+            if (!sentence) continue;
+
+            // 精确去重：同文本已 finalize 过则跳过
+            if (this.#finalizedSentences.has(sentence)) continue;
+
+            this.#lastFinalizedText = sentence;
+            this.#finalizedSentences.add(sentence);
+            // 限制 Set 大小（一次会话通常 < 50 句，安全上限）
+            if (this.#finalizedSentences.size > 150) {
+              let count = 0;
+              for (const key of this.#finalizedSentences) {
+                this.#finalizedSentences.delete(key);
+                if (++count >= 50) break;
+              }
+            }
+
+            process.stderr.write(`[IFlytekASR] punct-final: "${sentence.slice(0, 80)}"\n`);
+            const finalResult = { ...result, text: sentence };
+            this.#onFinal?.(finalResult);
+          }
+
+          // v3: 尾部残句强制 finalize
+          // 情况1: 已提取 N 个完整句 → 剩余文本在 lastIndex 之后
+          // 情况2: 无完整句匹配 → 整段文本都是残句
+          const trailing = extractedCount > 0 ? text.slice(lastIndex) : text;
+          const trailingClean = trailing
+            .replace(/^[.!?,\s]+/, "")   // 移除前导标点/逗号/空格
+            .trim();
+          const trailingWords = trailingClean.split(/\s+/).filter(w => w.length > 0);
+          if (trailingWords.length >= 3 && !this.#finalizedSentences.has(trailingClean)) {
+            this.#lastFinalizedText = trailingClean;
+            this.#finalizedSentences.add(trailingClean);
+            if (this.#finalizedSentences.size > 150) {
+              let count = 0;
+              for (const key of this.#finalizedSentences) {
+                this.#finalizedSentences.delete(key);
+                if (++count >= 50) break;
+              }
+            }
+            process.stderr.write(`[IFlytekASR] trailing-final: "${trailingClean.slice(0, 80)}"\n`);
+            const finalResult = { ...result, text: trailingClean };
+            this.#onFinal?.(finalResult);
+          }
+        }
+
+        // 始终发送 partial 用于前端实时显示
+        this.#onPartial?.(result);
       }
     });
 
@@ -144,6 +230,10 @@ export class IFlytekASRService implements IASRService {
 
     this.#ws.on("close", (code: number) => {
       process.stderr.write(`[IFlytekASR] WebSocket closed (code=${code})\n`);
+      // 非正常关闭时通知错误
+      if (code !== 1000 && code !== 1005 && this.#isRecognizing) {
+        this.#onError?.(new ASRError(`IFlytek WebSocket closed unexpectedly (code=${code})`));
+      }
       this.#isRecognizing = false;
       this.#ws = null;
       this.#audioBuffer.length = 0;
@@ -158,6 +248,7 @@ export class IFlytekASRService implements IASRService {
         res.on("data", (c: unknown) => { body += String(c); });
         res.on("end", () => {
           process.stderr.write(`[IFlytekASR] HTTP ${res.statusCode}: ${body.slice(0, 200)}\n`);
+          this.#onError?.(new ASRError(`IFlytek HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
         });
       });
     }
@@ -207,15 +298,58 @@ export class IFlytekASRService implements IASRService {
     this.#ws.send(chunk);
   }
 
-  #extractText(data: IFlytekASRResponseData | undefined): string {
-    if (!data?.cn?.st?.rt) return "";
-    return data.cn.st.rt
-      .map((seg) =>
-        (seg.ws ?? [])
-          .map((w) => (w.cw ?? []).map((c) => c.w ?? "").join(""))
-          .join("")
-      )
-      .join("");
+  /**
+   * 从原始响应中提取 ASRResult（含逐词元数据）
+   *
+   * - 映射 wp → ASRWordType（n→normal, p→punctuation, s→filler, g→segment）
+   * - type=0 → isDeterministic=true
+   * - 计算 hasPunctuation / hasSegmentBreak 布尔标志
+   *
+   * text 字段包含所有词（含标点），由 AudioPipeline 按业务需求过滤。
+   */
+  #extractResult(data: IFlytekASRResponseData | undefined): ASRResult {
+    const cn = data?.cn;
+    const stType = cn?.st?.type;
+    const isDeterministic = stType === 0;
+    const bg = cn?.bg ?? 0;
+    const ed = cn?.ed ?? 0;
+
+    const wpMap: Record<string, ASRWordType> = {
+      n: "normal",
+      p: "punctuation",
+      s: "filler",
+      g: "segment",
+    };
+
+    let hasPunctuation = false;
+    let hasSegmentBreak = false;
+    const words: EnrichedASRWord[] = [];
+    const textParts: string[] = [];
+
+    if (!cn?.st?.rt) return { text: "", isFinal: false, confidence: 0, startTime: bg, endTime: ed };
+
+    for (const seg of cn.st.rt) {
+      for (const ws of seg.ws ?? []) {
+        const wb = ws.wb ?? 0;
+        const we = ws.we ?? 0;
+        for (const cw of ws.cw ?? []) {
+          const w = cw.w ?? "";
+          const wp = cw.wp ?? "n";
+          const wordType: ASRWordType = wpMap[wp] ?? "normal";
+
+          if (wordType === "punctuation") hasPunctuation = true;
+          if (wordType === "segment") hasSegmentBreak = true;
+
+          words.push({ text: w, wordType, isDeterministic, startMs: wb, endMs: we });
+          textParts.push(w);
+        }
+      }
+    }
+
+    const text = textParts.join("");
+    const isFinal = data?.ls === true;
+
+    return { text, isFinal, confidence: 0.9, startTime: bg, endTime: ed, words, hasPunctuation, hasSegmentBreak };
   }
 
   #buildSignedUrl(asrConfig: ASRConfig): string {

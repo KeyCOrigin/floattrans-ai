@@ -68,14 +68,23 @@ export class Session {
   }
 
   stop(): void {
+    if (this.#state === "idle") {
+      throw new InvalidStateError(this.#state, "listening or paused", "stop");
+    }
     this.#state = "stopped";
   }
 
   addSegment(segment: SessionSegment): void {
+    if (this.#state !== "listening" && this.#state !== "paused") {
+      throw new InvalidStateError(this.#state, "listening or paused", "addSegment");
+    }
     this.#segments.push(segment);
   }
 
   applyCorrection(correction: SessionCorrection): void {
+    if (this.#state === "idle") {
+      throw new InvalidStateError(this.#state, "listening, paused, or stopped", "applyCorrection");
+    }
     this.#corrections.push(correction);
     const segment = this.#segments.find((s) => s.id === correction.segmentId);
     if (segment) {
@@ -85,9 +94,9 @@ export class Session {
     }
   }
 
-  getContext(contextSize: number): Array<{ en: string; zh: string }> {
+  getContext(contextSize: number): Array<{ segmentId: string; en: string; zh: string }> {
     return this.#segments
       .slice(-contextSize)
-      .map((s) => ({ en: s.english, zh: s.chinese }));
+      .map((s) => ({ segmentId: s.id, en: s.english, zh: s.chinese }));
   }
 }

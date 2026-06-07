@@ -1,6 +1,7 @@
 import { StrictMode, Component, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { DanmakuOverlay } from "./components/DanmakuOverlay";
+import { TranscriptOverlay } from "./components/TranscriptOverlay";
+import "./styles/overlay.css";
 
 const rootEl = document.getElementById("root");
 if (!rootEl) {
@@ -8,7 +9,6 @@ if (!rootEl) {
   throw new Error("FATAL: #root not found");
 }
 
-// 错误边界
 class EB extends Component<{ children: ReactNode }, { err: Error | null }> {
   state = { err: null as Error | null };
   static getDerivedStateFromError(e: Error) { return { err: e }; }
@@ -24,11 +24,10 @@ try {
   createRoot(rootEl).render(
     <StrictMode>
       <EB>
-        <DanmakuOverlay />
+        <TranscriptOverlay />
       </EB>
     </StrictMode>,
   );
-  console.log("%c[overlay] React mounted", "color:lime");
 } catch (e) {
   rootEl.innerHTML = `<div style="color:#f44;padding:20px;background:rgba(0,0,0,0.85);font-family:monospace">FATAL: ${e instanceof Error ? e.message : String(e)}</div>`;
 }
