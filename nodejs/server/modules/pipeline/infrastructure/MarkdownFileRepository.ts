@@ -26,6 +26,16 @@ export class MarkdownFileRepository implements ITranscriptRepository {
   /** 写入串行化 Promise 链，保证同文件不会并发写入 */
   #writeChain = Promise.resolve();
 
+  saveContent(sessionId: string, markdown: string): void {
+    const filePath = this.getFilePath(sessionId);
+    this.#writeChain = this.#writeChain.then(() => {
+      return fs.promises.writeFile(filePath, markdown, "utf-8");
+    }).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[MarkdownRepo] saveContent failed: ${message}\n`);
+    });
+  }
+
   save(doc: LiveDocument): void {
     const filePath = this.getFilePath(doc.id);
     const markdown = doc.toMarkdown();

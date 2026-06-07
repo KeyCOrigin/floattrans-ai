@@ -268,13 +268,13 @@ export class AudioPipeline {
 
   /**
    * LLM 全文修正（fire-and-forget，不阻塞管道）。
-   * 读取当前文档全文 → 发给 LLM → diff 变更 → 应用修正 → 存盘 → 推送。
+   * 读取当前文档可见行 → 发给 LLM → LLM 返回含 HTML 注释的 markdown →
+   * diff 变更 + 检测合并 → 更新内部状态 → 推送原始 LLM 输出到前端 → 存盘。
    *
-   * Phase 1 变化：
-   *   - 移除 rebuildFromCorrected / parseFullDocument 路径
-   *   - 始终使用增量 diff（按位置匹配）
-   *   - 时间守卫：距上次 LLM 修正 < 8秒 → 跳过
-   *   - Phase 2 将在此方法中集成 MergeGroup 合并逻辑
+   * v6 变化：
+   *   - LLM 输入使用 toVisibleMarkdown()（干净无注释）
+   *   - LLM 输出直接推送前端 + 存盘（HTML 注释由前端 react-markdown 天然隐藏）
+   *   - 移除后端生成隐藏注释的逻辑（信任 LLM 输出）
    */
   async #triggerLLMCorrection(onError: (err: Error) => void): Promise<void> {
     const doc = this.#doc;
@@ -288,7 +288,7 @@ export class AudioPipeline {
     }
     this.#lastLLMCorrectionAt = now;
 
-    const markdown = doc.toMarkdown();
+    const markdown = doc.toVisibleMarkdown();
     if (!markdown) return;
 
     try {
@@ -303,10 +303,9 @@ export class AudioPipeline {
         doc.applyRefineResult(diffs);
       }
 
-      // ── 2. Phase 2: 检测 LLM 是否合并了行（diff 之后再 merge）──
+      // ── 2. 检测 LLM 是否合并了行（parsedLines 少于 doc.lines）──
       const merges = this.diffEngine.detectMerges(doc.lines, parsedLines);
       for (const m of merges) {
-        // 隐藏被合并的行（保留代表行可见）
         const allLineIds = [m.representativeLineId, ...m.mergedLineIds];
         const repLine = doc.getLine(m.representativeLineId);
         const repText = repLine?.english ?? "";
@@ -322,10 +321,10 @@ export class AudioPipeline {
         );
       }
 
-      // 有变更（修正或合并）→ 存盘 + 推送
+      // 有变更 → 存盘（LLM 原始输出）+ 推送前端
       if (diffs.length > 0 || merges.length > 0) {
-        this.repository.save(doc);
-        output.sendContent(doc.toMarkdown(), doc.version);
+        this.repository.saveContent(doc.id, correctedText);
+        output.sendContent(correctedText, doc.version);
 
         process.stderr.write(
           `[Pipeline] LLM: ${diffs.length} corrections, ${merges.length} merges ` +
